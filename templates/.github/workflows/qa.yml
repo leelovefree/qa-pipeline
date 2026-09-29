@@ -1,0 +1,35 @@
+name: QA
+
+on:
+  pull_request:
+  schedule:
+    - cron: '0 3 * * *'   # nightly full regression
+  workflow_dispatch: {}
+
+jobs:
+  # App-owned: build however this app builds, then hand over a prebuilt artifact.
+  # iOS: a zipped *simulator* build (.app.zip via `ditto -c -k --keepParent`) — an .ipa cannot run on
+  # a simulator. Android: an .apk.
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build simulator app
+        run: |
+          xcodebuild -project MyApp.xcodeproj -scheme MyApp -sdk iphonesimulator \
+            -configuration Release -derivedDataPath build build
+          APP=$(find build/Build/Products/Release-iphonesimulator -maxdepth 1 -name '*.app' | head -1)
+          ditto -c -k --keepParent "$APP" MyApp.app.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-under-test
+          path: MyApp.app.zip
+
+  # Framework-owned: zero AI calls. Pin to a tag.
+  e2e:
+    needs: build
+    uses: leelovefree/qa-pipeline/.github/workflows/regression.yml@v0.1.0
+    with:
+      platform: ios
+      app_artifact: app-under-test
+      tests_dir: qa-tests

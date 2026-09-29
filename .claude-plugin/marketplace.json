@@ -1,0 +1,14 @@
+{
+  "name": "qa-pipeline",
+  "owner": {
+    "name": "Linh Doan"
+  },
+  "description": "Marketplace for the qa-pipeline Claude Code plugin.",
+  "plugins": [
+    {
+      "name": "qa-pipeline",
+      "description": "App-agnostic AI-assisted mobile QA pipeline (spec-extractor, automation-writer, pipeline rules, reusable CI workflow).",
+      "source": "./"
+    }
+  ]
+}

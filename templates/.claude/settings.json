@@ -1,0 +1,10 @@
+{
+  "extraKnownMarketplaces": {
+    "qa-pipeline": {
+      "source": { "source": "github", "repo": "leelovefree/qa-pipeline" }
+    }
+  },
+  "enabledPlugins": {
+    "qa-pipeline@qa-pipeline": true
+  }
+}

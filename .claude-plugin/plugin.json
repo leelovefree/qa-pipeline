@@ -1,0 +1,6 @@
+{
+  "name": "qa-pipeline",
+  "version": "0.1.0",
+  "description": "App-agnostic AI-assisted mobile QA pipeline: ticket -> spec -> test cases -> Maestro flows -> PR -> zero-AI CI regression on a prebuilt app artifact.",
+  "author": { "name": "Linh Doan" }
+}

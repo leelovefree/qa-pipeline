@@ -1,0 +1,139 @@
+name: QA Regression (Stage 6 — zero AI calls, do not add any LLM step to this file)
+
+# Reusable workflow. An app repo calls it after its own build job, handing over a prebuilt app
+# artifact. This workflow never builds from source and never needs to know the app's toolchain —
+# it only installs the artifact and runs the app repo's Maestro flows. Pass/fail is Maestro's own
+# exit code from real device state; nothing in this file may override it.
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: "ios | android (android: not implemented yet)"
+        type: string
+        required: true
+      app_artifact:
+        description: >-
+          Name of a GitHub Actions artifact uploaded earlier in the same run. For iOS it must
+          contain one zipped simulator build (*.app.zip, made with `ditto -c -k --keepParent`).
+          For Android, one *.apk. Mutually exclusive with app_url.
+        type: string
+        default: ""
+      app_url:
+        description: "Direct download URL of the same file, instead of app_artifact."
+        type: string
+        default: ""
+      tests_dir:
+        description: "Pipeline-managed Maestro flows (qa-tests/<module>/<feature>/*.yaml) in the app repo."
+        type: string
+        default: qa-tests
+      extra_flows_dir:
+        description: "Optional extra flow folder in the app repo to run after tests_dir (e.g. .maestro)."
+        type: string
+        default: ""
+      include_tags:
+        description: "Optional comma-separated Maestro tags to run (e.g. smoke). Empty = all flows."
+        type: string
+        default: ""
+      ios_device:
+        description: "iOS simulator device name available on the runner image."
+        type: string
+        default: iPhone 16
+      runner:
+        type: string
+        default: macos-15
+      timeout_minutes:
+        type: number
+        default: 30
+
+jobs:
+  regression:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    steps:
+      # Checks out the *calling* app repo — flows and CASES.md live there, not here.
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          APP_ARTIFACT: ${{ inputs.app_artifact }}
+          APP_URL: ${{ inputs.app_url }}
+        run: |
+          case "$PLATFORM" in
+            ios) ;;
+            android) echo "::error::platform=android is not implemented yet in qa-pipeline"; exit 1 ;;
+            *) echo "::error::unknown platform '$PLATFORM' (expected ios | android)"; exit 1 ;;
+          esac
+          if [ -n "$APP_ARTIFACT" ] && [ -n "$APP_URL" ]; then
+            echo "::error::set exactly one of app_artifact / app_url, not both"; exit 1
+          fi
+          if [ -z "$APP_ARTIFACT" ] && [ -z "$APP_URL" ]; then
+            echo "::error::set one of app_artifact / app_url"; exit 1
+          fi
+
+      - name: Download app artifact (from this run)
+        if: inputs.app_artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.app_artifact }}
+          path: .qa-app
+
+      - name: Download app (from URL)
+        if: inputs.app_url != ''
+        env:
+          APP_URL: ${{ inputs.app_url }}
+        run: |
+          mkdir -p .qa-app
+          curl -fsSL --retry 3 -o ".qa-app/$(basename "${APP_URL%%\?*}")" "$APP_URL"
+
+      - name: Install Maestro
+        run: |
+          brew install openjdk@17
+          curl -fsSL "https://get.maestro.mobile.dev" | bash
+          echo "JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" >> "$GITHUB_ENV"
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/openjdk@17/bin" >> "$GITHUB_PATH"
+
+      - name: Boot iOS simulator and install app
+        if: inputs.platform == 'ios'
+        env:
+          SIM_NAME: ${{ inputs.ios_device }}
+        run: |
+          ZIP=$(find .qa-app -name '*.app.zip' | head -1)
+          if [ -z "$ZIP" ]; then
+            echo "::error::no *.app.zip found in the app artifact — iOS needs a zipped simulator build, not an .ipa"
+            find .qa-app; exit 1
+          fi
+          ditto -x -k "$ZIP" .qa-app/unzipped
+          APP_PATH=$(find .qa-app/unzipped -maxdepth 2 -name '*.app' -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::$ZIP does not contain a .app bundle"; exit 1
+          fi
+          xcrun simctl boot "$SIM_NAME" || true
+          xcrun simctl bootstatus "$SIM_NAME" -b
+          xcrun simctl install "$SIM_NAME" "$APP_PATH"
+          echo "Installed $(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP_PATH/Info.plist") on $SIM_NAME"
+
+      - name: Run pipeline-managed tests
+        env:
+          TESTS_DIR: ${{ inputs.tests_dir }}
+          INCLUDE_TAGS: ${{ inputs.include_tags }}
+        run: |
+          flows=()
+          while IFS= read -r f; do
+            flows+=("$f")
+          done < <(find "$TESTS_DIR" -name '*.yaml' 2>/dev/null | sort)
+          if [ "${#flows[@]}" -eq 0 ]; then
+            echo "No pipeline-managed flows under $TESTS_DIR yet — skipping, this is expected before the first ticket."
+            exit 0
+          fi
+          args=()
+          if [ -n "$INCLUDE_TAGS" ]; then args+=(--include-tags "$INCLUDE_TAGS"); fi
+          maestro test "${args[@]}" "${flows[@]}"
+
+      - name: Run extra flows
+        if: inputs.extra_flows_dir != ''
+        env:
+          EXTRA_DIR: ${{ inputs.extra_flows_dir }}
+        run: maestro test "$EXTRA_DIR"
