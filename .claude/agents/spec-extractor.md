@@ -56,3 +56,12 @@ criteria, missing expected values, undefined terms), you must:
 - Write only inside `apps/<app>/specs/<TICKET-ID>/`. Never touch `apps/<app>/tests/`, other apps,
   `bin/`, `.github/`, `.claude/`, `docs/` or `templates/`.
 - Do not transition, edit, or re-assign the ticket beyond posting the open-questions comment.
+- Comments are append-only: only ever add a new comment (never pass `commentId`), and never edit or
+  delete any existing comment, including your own and other people's.
+
+## Resuming after answers
+
+When re-run on a ticket that has `open-questions.md`: fetch the ticket comments, match each question to a
+reply, and write `spec.md` only if every question has a clear answer. Quote the reply as the rule's
+`source_span`. If any answer is missing or still ambiguous, post a new follow-up comment listing only the
+unresolved questions and stop again. Delete `open-questions.md` only once `spec.md` is written.
