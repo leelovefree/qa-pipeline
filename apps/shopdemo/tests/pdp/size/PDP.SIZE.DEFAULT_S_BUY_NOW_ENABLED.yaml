@@ -1,0 +1,52 @@
+# Requirement: PDP.SIZE.DEFAULT_S_BUY_NOW_ENABLED
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/pdp/size/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# Size selected state is NOT exposed in the accessibility tree (no `selected` flag on any option), so
+# per the reviewer-approved case it is verified visually with assertScreenshot, cropped per option.
+# Baselines in ./screenshots/ were captured 2026-09-30 from a fresh PDP of "Defile Lux Blazer" and
+# checked by eye: S = filled pink (selected), M/L/XL = grey outline (unselected).
+# HUMAN REVIEW REQUIRED: confirm the four baseline PNGs before merging.
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+- tapOn: "Defile Lux Blazer"
+- assertVisible:
+    id: product_detail_screen
+# Size S selected, M/L/XL not selected (visual).
+- assertScreenshot:
+    path: screenshots/size_s_selected.png
+    cropOn:
+      id: product_detail_size_option_s
+- assertScreenshot:
+    path: screenshots/size_m_unselected.png
+    cropOn:
+      id: product_detail_size_option_m
+- assertScreenshot:
+    path: screenshots/size_l_unselected.png
+    cropOn:
+      id: product_detail_size_option_l
+- assertScreenshot:
+    path: screenshots/size_xl_unselected.png
+    cropOn:
+      id: product_detail_size_option_xl
+# Buy Now enabled (selector).
+- assertVisible:
+    id: product_detail_buy_now_button
+    text: "Buy Now"
+    enabled: true

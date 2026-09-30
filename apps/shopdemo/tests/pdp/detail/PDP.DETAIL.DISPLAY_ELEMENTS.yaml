@@ -1,0 +1,56 @@
+# Requirement: PDP.DETAIL.DISPLAY_ELEMENTS
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/pdp/detail/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# First product on home = "Defile Lux Blazer" ($300). Name/price asserted by id and non-empty text.
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+- tapOn: "Defile Lux Blazer"
+- assertVisible:
+    id: product_detail_screen
+- assertVisible:
+    id: product_detail_name_label
+    text: ".+"
+- assertVisible:
+    id: product_detail_price_label
+    text: ".+"
+- assertVisible:
+    id: product_detail_size_option_s
+    text: "S"
+- assertVisible:
+    id: product_detail_size_option_m
+    text: "M"
+- assertVisible:
+    id: product_detail_size_option_l
+    text: "L"
+- assertVisible:
+    id: product_detail_size_option_xl
+    text: "XL"
+# "exactly S, M, L, XL" — bounded negative check for neighbouring sizes.
+- assertNotVisible: "XS"
+- assertNotVisible: "XXL"
+- assertVisible:
+    id: product_detail_quantity_decrement_button
+- assertVisible:
+    id: product_detail_quantity_value_label
+- assertVisible:
+    id: product_detail_quantity_increment_button
+- assertVisible:
+    id: product_detail_buy_now_button
+    text: "Buy Now"

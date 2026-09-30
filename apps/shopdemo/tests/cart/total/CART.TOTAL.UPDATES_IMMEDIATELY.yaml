@@ -1,0 +1,92 @@
+# Requirement: CART.TOTAL.UPDATES_IMMEDIATELY
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/cart/total/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# Pinned from the real catalog: A = "Defile Lux Blazer" pA = $300, B = "Neck Short Sleeves" pB = $120.
+# Expected totals: step 2 $425, step 3 $725, step 4 $425, step 5 $305. Total Cost value located right
+# of "Total Cost" and below "Delivery Fee" (all summary values share id `cart_screen`).
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1: A x1, B x1
+- tapOn: "Defile Lux Blazer"
+- assertVisible:
+    id: product_detail_price_label
+    text: "\\$300"
+- tapOn:
+    id: product_detail_buy_now_button
+- tapOn:
+    id: cart_screen
+    text: "Back"
+- tapOn:
+    id: product_detail_back_button
+- assertVisible:
+    id: home_screen
+- tapOn: "Neck Short Sleeves"
+- assertVisible:
+    id: product_detail_price_label
+    text: "\\$120"
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+# Step 2: pA + pB + 5 = $425
+- assertVisible:
+    id: cart_screen
+    text: "\\$425"
+    rightOf:
+      text: "Total Cost"
+    below:
+      text: "Delivery Fee"
+# Step 3: + on A -> 2 x pA + pB + 5 = $725
+- tapOn:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Add"
+- assertVisible:
+    id: cart_screen
+    text: "\\$725"
+    rightOf:
+      text: "Total Cost"
+    below:
+      text: "Delivery Fee"
+# Step 4: − on A -> pA + pB + 5 = $425
+- tapOn:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Remove"
+- assertVisible:
+    id: cart_screen
+    text: "\\$425"
+    rightOf:
+      text: "Total Cost"
+    below:
+      text: "Delivery Fee"
+# Step 5: trash B -> pA + 5 = $305
+- tapOn:
+    id: cart_item_row_neck-short-sleeves-s-blue
+    text: "Trash"
+- assertVisible:
+    id: cart_screen
+    text: "\\$305"
+    rightOf:
+      text: "Total Cost"
+    below:
+      text: "Delivery Fee"
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"

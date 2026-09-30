@@ -1,0 +1,38 @@
+# Requirement: CART.BUY_NOW.NO_CONFIRMATION_MESSAGE
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/cart/buy_now/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# Bounded negative check (see CASES.md note): no system alert button and none of the listed texts.
+# Scope (spec narrowed 2026-09-30): the My Cart screen only. The PDP shows "Added to cart" after Back;
+# that is out of scope for this rule. Maestro `text` matching is case-insensitive.
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+- tapOn: "Defile Lux Blazer"
+- assertVisible:
+    id: product_detail_screen
+- tapOn:
+    id: product_detail_buy_now_button
+# Goes directly to My Cart, no alert/toast/banner.
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+- assertNotVisible: "OK"
+- assertNotVisible: ".*Added to cart.*"
+- assertNotVisible: ".*Added.*"
+- assertNotVisible: ".*Success.*"

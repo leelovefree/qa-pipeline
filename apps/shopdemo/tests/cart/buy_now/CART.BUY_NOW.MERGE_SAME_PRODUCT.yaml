@@ -1,0 +1,80 @@
+# Requirement: CART.BUY_NOW.MERGE_SAME_PRODUCT
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/cart/buy_now/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# Product P = "Defile Lux Blazer". Navigation back to home observed as: cart "Back" -> PDP,
+# PDP back button -> home. Step 4 "tap + until quantity shows 3" is bounded (max 5 taps).
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1-2: add P with quantity 2
+- tapOn: "Defile Lux Blazer"
+- assertVisible:
+    id: product_detail_screen
+- tapOn:
+    id: product_detail_quantity_increment_button
+- assertVisible:
+    id: product_detail_quantity_value_label
+    text: "^0*2$"
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*2$"
+# Step 3: back to home, reopen P
+- tapOn:
+    id: cart_screen
+    text: "Back"
+- tapOn:
+    id: product_detail_back_button
+- assertVisible:
+    id: home_screen
+- tapOn: "Defile Lux Blazer"
+- assertVisible:
+    id: product_detail_screen
+# Step 4: set quantity to 3, Buy Now
+- repeat:
+    times: 5
+    while:
+      notVisible:
+        id: product_detail_quantity_value_label
+        text: "^0*3$"
+    commands:
+      - tapOn:
+          id: product_detail_quantity_increment_button
+- assertVisible:
+    id: product_detail_quantity_value_label
+    text: "^0*3$"
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+# Exactly one line for P, quantity 5
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Defile Lux Blazer"
+- assertNotVisible:
+    text: "Defile Lux Blazer"
+    index: 1
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*5$"

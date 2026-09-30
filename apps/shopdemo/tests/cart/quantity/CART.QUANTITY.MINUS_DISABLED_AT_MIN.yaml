@@ -1,0 +1,74 @@
+# Requirement: CART.QUANTITY.MINUS_DISABLED_AT_MIN
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/cart/quantity/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# Row "−" is the row element with text "Remove".
+# OBSERVED 2026-09-30: at quantity 1 the accessibility tree reports "Remove" as enabled (no
+# enabled:false flag); tapping it is a no-op (quantity stays 01, line stays). The `enabled: false`
+# assertions below follow the spec ("−" is disabled at quantity 1) and are expected to FAIL against
+# this build until the app disables the control (or exposes the disabled state). Do not remove them.
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1
+- tapOn: "Defile Lux Blazer"
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*1$"
+# Step 2: "−" disabled at 1
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Remove"
+    enabled: false
+# Tapping it does not change quantity or remove the line
+- tapOn:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Remove"
+    retryTapIfNoChange: false
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*1$"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Defile Lux Blazer"
+# Step 3: + -> 2 ("−" enabled), − -> 1 ("−" disabled again)
+- tapOn:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Add"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*2$"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Remove"
+    enabled: true
+- tapOn:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Remove"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*1$"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Remove"
+    enabled: false
