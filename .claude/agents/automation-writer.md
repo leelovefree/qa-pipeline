@@ -67,3 +67,5 @@ and report the actual result.
   `.github/`, `.claude/`, `docs/` or `templates/`.
 - Never delete or weaken an existing CASES.md entry or `.yaml` assertion to make something easier to
   automate — if a case seems un-automatable as specified, stop and say so.
+- A failing flow is reported, never "fixed" by changing the spec, CASES.md expected result or an
+  assertion. If the app contradicts the spec, stop and report it as a fail for human triage.

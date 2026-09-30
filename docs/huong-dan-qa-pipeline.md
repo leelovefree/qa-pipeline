@@ -347,6 +347,22 @@ Kết quả pass/fail là **exit code của Maestro**. Không có bước AI nà
 4. Không có gì vào `main` nếu con người chưa duyệt PR.
 5. Mọi file (spec, case, flow) truy ngược được về ticket qua requirement ID.
 6. Tài khoản test và token chỉ lưu trong secrets. Không dùng dữ liệu thật của khách hàng hay rider.
+7. Không sửa spec (hay kết quả mong đợi, assertion) để test pass. Xem 9.1.
+
+### 9.1 Khi test fail: phân loại rồi mới sửa
+
+Người (không phải AI) phân loại mỗi lần fail trước khi làm gì tiếp:
+
+| Loại | Ai sai | Hành động |
+|---|---|---|
+| A | App sai so với yêu cầu đúng | Tạo bug ticket cho dev. Giữ test đỏ cho tới khi app sửa. |
+| B | Ticket gốc sai hoặc thiếu | Sửa ticket (ghi chú thay đổi), chạy lại Stage 2 ở session mới. |
+| C | AI diễn giải sai ticket | Sửa spec qua PR, ghi lý do trong PR. Lặp lại nhiều lần thì chỉnh prompt agent. |
+| D | Yêu cầu đã thay đổi thật | Ticket mới, chạy pipeline như tính năng mới. |
+
+- Spec đổi thì đi lại Stage 3 và 4 (mỗi stage một session), người duyệt diff spec.
+- Agent chỉ được đề xuất. Không agent nào tự sửa spec, kết quả mong đợi hay assertion để biến fail thành pass.
+- Khi review spec, xem kỹ trước các rule có `confidence` thấp hoặc `source_span` mơ hồ.
 
 ---
 
