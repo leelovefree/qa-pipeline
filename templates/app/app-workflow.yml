@@ -1,0 +1,41 @@
+name: "App: __APP__"
+
+# WHEN to test __App__. HOW lives in regression.yml. Template: copy to .github/workflows/app-<app>.yml and replace __APP__/__App__.
+
+on:
+  # The app repo publishes a new build and notifies us (payload: {"build": "<path|url|gh-release:...>"}).
+  repository_dispatch:
+    types: [__APP__-build]
+  # QA changes tests or the framework → re-test against the app's configured (latest) build.
+  pull_request:
+    paths:
+      - 'apps/__APP__/**'
+      - 'bin/**'
+      - '.github/workflows/regression.yml'
+      - '.github/workflows/app-__APP__.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/__APP__/**'
+      - 'bin/**'
+      - '.github/workflows/regression.yml'
+      - '.github/workflows/app-__APP__.yml'
+  schedule:
+    - cron: '0 3 * * *'   # nightly
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "Build to test (path, https URL or gh-release:owner/repo@tag/asset). Empty = config."
+        default: ""
+      module:
+        description: "Only this module under apps/__APP__/tests/. Empty = all."
+        default: ""
+
+jobs:
+  test:
+    uses: ./.github/workflows/regression.yml
+    with:
+      app: __APP__
+      build: ${{ github.event.client_payload.build || inputs.build || '' }}
+      module: ${{ inputs.module || '' }}
+    secrets: inherit

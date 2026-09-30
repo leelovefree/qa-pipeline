@@ -1,5 +1,12 @@
 # iOS Mobile QA Automation — Implementation Requirements
 
+> **Repo layout note (mono QA repo):** this spec was written for tests living inside the app repo. In
+> this repo, per-app artifacts live under `apps/<app>/` — `tests/<module>/<feature>/` → `apps/<app>/tests/…`,
+> `specs/<TICKET-ID>/` → `apps/<app>/specs/…`, `reports/` → `apps/<app>/reports/`. Agents live in
+> `.claude/agents/`, the CI runner is `bin/qa` + `.github/workflows/regression.yml`, and the app under test is
+> a prebuilt artifact referenced by `apps/<app>/app.config.yml` (never built here). See `CLAUDE.md`.
+
+
 **Purpose of this document:** a build spec for Claude Code. It defines what to build, the non-negotiable
 guardrails, the file/data contracts, and a concrete ordered task list. Hand this file to Claude Code as-is
 (e.g. `claude "Read ios-qa-automation-requirements.md and start with Phase 1, task 1"`) and it can execute

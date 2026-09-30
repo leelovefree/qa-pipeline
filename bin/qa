@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# qa — install an app build and run its Maestro tests. Same command locally and in CI.
+# Zero AI calls: pass/fail is Maestro's own exit code. Do not add any LLM step here.
+#
+#   bin/qa install <app> [--build <path|url|gh-release:...>] [--device <name|udid>]
+#   bin/qa run     <app> [--build ...] [--device ...] [--module <module>] [--tags <t1,t2>] [--no-install]
+#   bin/qa apps
+#
+# <app> is a folder under apps/ with an app.config.yml. Bash 3.2 compatible (macOS default).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WORK="$ROOT/.qa-work"
+
+die() { echo "qa: error: $*" >&2; exit 1; }
+log() { echo "qa: $*" >&2; }
+
+usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+# Read a flat `key: value` from app.config.yml (inline `# comments` stripped).
+cfg() {
+  local v
+  v=$(sed -n "s/^$1:[[:space:]]*//p" "$CONFIG" | head -1 | sed 's/[[:space:]]#.*$//; s/[[:space:]]*$//')
+  printf '%s' "$v"
+}
+
+# Resolve a build reference to a local .app directory (iOS) or .apk file (Android). Prints its path.
+fetch_build() {
+  local ref="$1" dest="$WORK/$APP/build"
+  rm -rf "$dest"; mkdir -p "$dest"
+  case "$ref" in
+    gh-release:*)
+      # gh-release:<owner>/<repo>@<tag|latest>/<asset>
+      local spec="${ref#gh-release:}" repo tag asset
+      repo="${spec%%@*}"; tag="${spec#*@}"; asset="${tag#*/}"; tag="${tag%%/*}"
+      [ -n "$repo" ] && [ -n "$tag" ] && [ -n "$asset" ] || die "bad gh-release ref '$ref' (want gh-release:<owner>/<repo>@<tag|latest>/<asset>)"
+      command -v gh >/dev/null || die "gh CLI required for gh-release builds"
+      log "downloading $asset from $repo release '$tag'"
+      if [ "$tag" = latest ]; then
+        gh release download -R "$repo" -p "$asset" -D "$dest"
+      else
+        gh release download "$tag" -R "$repo" -p "$asset" -D "$dest"
+      fi
+      ref="$dest/$asset" ;;
+    http://*|https://*)
+      local file="$dest/$(basename "${ref%%\?*}")"
+      log "downloading $ref"
+      if [ -n "${QA_BUILD_TOKEN:-}" ]; then
+        curl -fsSL --retry 3 -H "Authorization: Bearer $QA_BUILD_TOKEN" -o "$file" "$ref"
+      else
+        curl -fsSL --retry 3 -o "$file" "$ref"
+      fi
+      ref="$file" ;;
+    *)
+      case "$ref" in /*) ;; *) ref="$ROOT/$ref" ;; esac
+      [ -e "$ref" ] || die "build not found: $ref" ;;
+  esac
+
+  case "$PLATFORM" in
+    ios)
+      case "$ref" in
+        *.ipa) die "$ref is a device build (.ipa) — simulators need a simulator build (.app or .app.zip)" ;;
+        *.zip)
+          ditto -x -k "$ref" "$dest/unzipped"
+          ref=$(find "$dest/unzipped" -maxdepth 2 -name '*.app' -type d | head -1)
+          [ -n "$ref" ] || die "no .app bundle inside the zip" ;;
+        *.app|*.app/) ;;
+        *) die "unsupported iOS build '$ref' (want .app or .app.zip)" ;;
+      esac ;;
+    android) die "platform android: runner not implemented yet" ;;
+  esac
+  printf '%s' "${ref%/}"
+}
+
+# Pick the simulator: --device (name or UDID) > an already-booted one > ios_device from config (booted).
+ios_udid() {
+  local want="${DEVICE:-}" udid
+  if [ -z "$want" ]; then
+    udid=$(xcrun simctl list devices booted | grep -oE '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}' | head -1 || true)
+    if [ -n "$udid" ]; then printf '%s' "$udid"; return; fi
+    want=$(cfg ios_device)
+    [ -n "$want" ] || die "no booted simulator and no ios_device in $CONFIG"
+  fi
+  if printf '%s' "$want" | grep -qE '^[0-9A-F]{8}-'; then
+    udid="$want"
+  else
+    udid=$(xcrun simctl list devices available | grep -F "    $want (" | grep -oE '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}' | head -1 || true)
+    [ -n "$udid" ] || die "simulator '$want' not found (xcrun simctl list devices available)"
+  fi
+  xcrun simctl boot "$udid" 2>/dev/null || true
+  xcrun simctl bootstatus "$udid" -b >/dev/null
+  printf '%s' "$udid"
+}
+
+do_install() {
+  local ref app_path actual
+  ref="${BUILD:-$(cfg build)}"
+  [ -n "$ref" ] || die "no build given (--build) and no 'build:' in $CONFIG"
+  app_path=$(fetch_build "$ref")
+  actual=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app_path/Info.plist")
+  # Guard: never run one app's tests against another app's build.
+  [ "$actual" = "$APP_ID" ] || die "build is '$actual' but $APP/app.config.yml expects app_id '$APP_ID'"
+  UDID=$(ios_udid)
+  xcrun simctl install "$UDID" "$app_path"
+  log "installed $actual on simulator $UDID"
+}
+
+do_run() {
+  local dir="$ROOT/apps/$APP/tests" flows=() f
+  [ -z "$MODULE" ] || dir="$dir/$MODULE"
+  [ -d "$dir" ] || die "no tests at ${dir#$ROOT/}"
+  while IFS= read -r f; do flows+=("$f"); done < <(find "$dir" -name '*.yaml' | sort)
+  if [ "${#flows[@]}" -eq 0 ]; then
+    log "no flows under ${dir#$ROOT/} yet — nothing to run"; return 0
+  fi
+  local args=()
+  [ -z "$TAGS" ] || args+=(--include-tags "$TAGS")
+  log "running ${#flows[@]} flow(s) from ${dir#$ROOT/} on $UDID"
+  mkdir -p "$WORK/$APP"
+  maestro --device "$UDID" test ${args[@]+"${args[@]}"} \
+    --format junit --output "$WORK/$APP/report.xml" "${flows[@]}"
+}
+
+CMD="${1:-}"; [ $# -gt 0 ] && shift
+case "$CMD" in
+  -h|--help|help|"") usage 0 ;;
+  apps) for d in "$ROOT"/apps/*/app.config.yml; do [ -e "$d" ] && basename "$(dirname "$d")"; done; exit 0 ;;
+  install|run) ;;
+  *) echo "qa: unknown command '$CMD'" >&2; usage 1 ;;
+esac
+
+APP="${1:-}"; [ -n "$APP" ] || die "missing <app> (see: bin/qa apps)"; shift
+CONFIG="$ROOT/apps/$APP/app.config.yml"
+[ -f "$CONFIG" ] || die "no $CONFIG (see: bin/qa apps)"
+
+BUILD=""; DEVICE=""; MODULE=""; TAGS=""; NO_INSTALL=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --build) BUILD="${2:?--build needs a value}"; shift 2 ;;
+    --device) DEVICE="${2:?--device needs a value}"; shift 2 ;;
+    --module) MODULE="${2:?--module needs a value}"; shift 2 ;;
+    --tags) TAGS="${2:?--tags needs a value}"; shift 2 ;;
+    --no-install) NO_INSTALL=1; shift ;;
+    *) die "unknown option '$1'" ;;
+  esac
+done
+
+PLATFORM=$(cfg platform); APP_ID=$(cfg app_id)
+[ -n "$APP_ID" ] || die "no app_id in $CONFIG"
+[ "$PLATFORM" = ios ] || die "platform '$PLATFORM': only ios is implemented"
+
+if [ "$CMD" = install ]; then do_install; exit 0; fi
+if [ -n "$NO_INSTALL" ]; then UDID=$(ios_udid); else do_install; fi
+do_run

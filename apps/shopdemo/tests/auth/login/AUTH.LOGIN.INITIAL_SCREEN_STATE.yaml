@@ -1,0 +1,15 @@
+# Requirement: AUTH.LOGIN.INITIAL_SCREEN_STATE
+# Ticket: SCRUM-5 | Spec: apps/shopdemo/specs/SCRUM-5/spec.md | Case: apps/shopdemo/tests/auth/login/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-29.
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: login_screen
+- assertVisible:
+    id: login_email_field
+- assertVisible:
+    id: login_password_field
+- assertVisible:
+    id: login_submit_button

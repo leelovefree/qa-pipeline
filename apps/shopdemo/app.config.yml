@@ -1,0 +1,17 @@
+# App under test: ShopDemo (iOS). Dev-owned source: https://github.com/leelovefree/ios-shop-demo
+# Read by bin/qa (install + run) and by the pipeline agents. Flat `key: value` only.
+
+name: shopdemo
+platform: ios                      # ios | android (android: runner not implemented yet)
+app_id: com.qademo.iosshopdemo     # bundle id / package name — every flow's `appId`, checked on install
+
+# Which build to test. Override per run with `bin/qa run shopdemo --build <path|url>`.
+#   local path      ./builds/ShopDemo.app.zip  or  /abs/path/ShopDemo.app   (iOS: simulator build)
+#   https URL       https://.../ShopDemo.app.zip   (optional bearer token from $QA_BUILD_TOKEN)
+#   GitHub release  gh-release:<owner>/<repo>@<tag|latest>/<asset>   (auth via $GH_TOKEN / gh auth)
+build: gh-release:leelovefree/ios-shop-demo@latest/ShopDemo.app.zip
+
+ios_device: iPhone 16              # simulator booted when none is running
+
+tracker_mcp_server: atlassian-personal   # personal Jira (linhdngen.atlassian.net), NOT the company Rovo connector
+tracker_project_key: SCRUM
