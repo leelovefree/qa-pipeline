@@ -3,7 +3,7 @@
 # Zero AI calls: pass/fail is Maestro's own exit code. Do not add any LLM step here.
 #
 #   bin/qa install <app> [--build <path|url|gh-release:...>] [--device <name|udid>]
-#   bin/qa run     <app> [--build ...] [--device ...] [--module <module>] [--tags <t1,t2>] [--no-install]
+#   bin/qa run     <app> [--build ...] [--device ...] [--module <module>] [--tags <t1,t2>] [--exclude-tags <t1,t2>] [--no-install]
 #   bin/qa apps
 #
 # <app> is a folder under apps/ with an app.config.yml. Bash 3.2 compatible (macOS default).
@@ -115,6 +115,7 @@ do_run() {
   fi
   local args=()
   [ -z "$TAGS" ] || args+=(--include-tags "$TAGS")
+  [ -z "$EXCLUDE_TAGS" ] || { args+=(--exclude-tags "$EXCLUDE_TAGS"); log "excluding flows tagged: $EXCLUDE_TAGS"; }
   log "running ${#flows[@]} flow(s) from ${dir#$ROOT/} on $UDID"
   mkdir -p "$WORK/$APP"
   maestro --device "$UDID" test ${args[@]+"${args[@]}"} \
@@ -133,13 +134,14 @@ APP="${1:-}"; [ -n "$APP" ] || die "missing <app> (see: bin/qa apps)"; shift
 CONFIG="$ROOT/apps/$APP/app.config.yml"
 [ -f "$CONFIG" ] || die "no $CONFIG (see: bin/qa apps)"
 
-BUILD=""; DEVICE=""; MODULE=""; TAGS=""; NO_INSTALL=""
+BUILD=""; DEVICE=""; MODULE=""; TAGS=""; EXCLUDE_TAGS=""; NO_INSTALL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --build) BUILD="${2:?--build needs a value}"; shift 2 ;;
     --device) DEVICE="${2:?--device needs a value}"; shift 2 ;;
     --module) MODULE="${2:?--module needs a value}"; shift 2 ;;
     --tags) TAGS="${2:?--tags needs a value}"; shift 2 ;;
+    --exclude-tags) EXCLUDE_TAGS="${2:?--exclude-tags needs a value}"; shift 2 ;;
     --no-install) NO_INSTALL=1; shift ;;
     *) die "unknown option '$1'" ;;
   esac
