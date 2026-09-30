@@ -1,0 +1,51 @@
+# Requirement: CART.BUY_NOW.ADD_AND_OPEN_CART
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/cart/buy_now/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# Product P = first home product "Defile Lux Blazer". Cart row children all share the row id
+# `cart_item_row_defile-lux-blazer-s-beige`; quantity label is zero-padded ("03"), matched "^0*3$".
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+- tapOn: "Defile Lux Blazer"
+- assertVisible:
+    id: product_detail_screen
+- tapOn:
+    id: product_detail_quantity_increment_button
+- tapOn:
+    id: product_detail_quantity_increment_button
+- assertVisible:
+    id: product_detail_quantity_value_label
+    text: "^0*3$"
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Defile Lux Blazer"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*3$"
+# Exactly one line: no second line for P, and no line for any other product.
+- assertNotVisible:
+    text: "Defile Lux Blazer"
+    index: 1
+- assertNotVisible:
+    id: "cart_item_row_(?!defile-lux-blazer-).*"

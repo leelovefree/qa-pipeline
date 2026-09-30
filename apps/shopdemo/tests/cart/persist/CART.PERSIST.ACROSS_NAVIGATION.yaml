@@ -1,0 +1,115 @@
+# Requirement: CART.PERSIST.ACROSS_NAVIGATION
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/cart/persist/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# A = "Defile Lux Blazer" $300, B = "Neck Short Sleeves" $120, C = "Magnolia Pink Dress" $150
+# (row id cart_item_row_magnolia-pink-dress-s-pink). Step-2 total = 2x300 + 120 + 5 = $725;
+# expected final total = 725 + 150 = $875.
+# Per reviewer note, persistence is also verified by re-entering the cart via `home_cart_button`
+# (observed: its "Back" returns to home).
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1: A x2
+- tapOn: "Defile Lux Blazer"
+- tapOn:
+    id: product_detail_quantity_increment_button
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+# Step 2: B x1; note total
+- tapOn:
+    id: cart_screen
+    text: "Back"
+- tapOn:
+    id: product_detail_back_button
+- assertVisible:
+    id: home_screen
+- tapOn: "Neck Short Sleeves"
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*2$"
+- assertVisible:
+    id: cart_item_row_neck-short-sleeves-s-blue
+    text: "^0*1$"
+- assertVisible:
+    id: cart_screen
+    text: "\\$725"
+    rightOf:
+      text: "Total Cost"
+    below:
+      text: "Delivery Fee"
+# Step 3: back to home
+- tapOn:
+    id: cart_screen
+    text: "Back"
+- tapOn:
+    id: product_detail_back_button
+- assertVisible:
+    id: home_screen
+# Reviewer note: re-enter cart via home cart icon, A and B intact
+- tapOn:
+    id: home_cart_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*2$"
+- assertVisible:
+    id: cart_item_row_neck-short-sleeves-s-blue
+    text: "^0*1$"
+- assertVisible:
+    id: cart_screen
+    text: "\\$725"
+    rightOf:
+      text: "Total Cost"
+    below:
+      text: "Delivery Fee"
+- tapOn:
+    id: cart_screen
+    text: "Back"
+- assertVisible:
+    id: home_screen
+# Step 4: C x1
+- tapOn: "Magnolia Pink Dress"
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*2$"
+- assertVisible:
+    id: cart_item_row_neck-short-sleeves-s-blue
+    text: "^0*1$"
+- assertVisible:
+    id: cart_item_row_magnolia-pink-dress-s-pink
+    text: "^0*1$"
+- assertVisible:
+    id: cart_screen
+    text: "\\$875"
+    rightOf:
+      text: "Total Cost"
+    below:
+      text: "Delivery Fee"

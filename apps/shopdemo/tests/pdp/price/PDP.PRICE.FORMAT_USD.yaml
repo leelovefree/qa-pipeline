@@ -1,0 +1,43 @@
+# Requirement: PDP.PRICE.FORMAT_USD
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/pdp/price/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# Product below $1.000: "Defile Lux Blazer" (observed "$300"). Catalog max is $300, so step 2
+# (thousands separator) is not exercised — accepted by reviewer (see CASES.md note).
+# Cart row children all share the row id `cart_item_row_defile-lux-blazer-s-beige` (default size S,
+# colour Beige), so the cart unit price is matched by row id + format regex.
+# Maestro `text` is a full-string regex, so the pattern below is effectively anchored.
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1: PDP price format
+- tapOn: "Defile Lux Blazer"
+- assertVisible:
+    id: product_detail_screen
+- assertVisible:
+    id: product_detail_price_label
+    text: "^\\$\\d{1,3}(\\.\\d{3})*$"
+# Step 3: cart line unit price format
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^\\$\\d{1,3}(\\.\\d{3})*$"

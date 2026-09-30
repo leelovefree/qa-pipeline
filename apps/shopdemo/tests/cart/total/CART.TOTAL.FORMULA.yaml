@@ -1,0 +1,66 @@
+# Requirement: CART.TOTAL.FORMULA
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/cart/total/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# Pinned from the real catalog: A = "Defile Lux Blazer" pA = $300, B = "Neck Short Sleeves" pB = $120.
+# Expected Total Cost = 2 x 300 + 1 x 120 + 5 = $725. The Total Cost value shares the id `cart_screen`
+# with the other summary values, so it is located as the element right of "Total Cost" and below
+# "Delivery Fee" (Sub-total value sits above Delivery Fee).
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1: A, pA = $300, qty 2
+- tapOn: "Defile Lux Blazer"
+- assertVisible:
+    id: product_detail_price_label
+    text: "\\$300"
+- tapOn:
+    id: product_detail_quantity_increment_button
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+# Step 2: B, pB = $120, qty 1
+- tapOn:
+    id: cart_screen
+    text: "Back"
+- tapOn:
+    id: product_detail_back_button
+- assertVisible:
+    id: home_screen
+- tapOn: "Neck Short Sleeves"
+- assertVisible:
+    id: product_detail_price_label
+    text: "\\$120"
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*2$"
+- assertVisible:
+    id: cart_item_row_neck-short-sleeves-s-blue
+    text: "^0*1$"
+# Step 3: Total Cost = $725
+- assertVisible:
+    id: cart_screen
+    text: "\\$725"
+    rightOf:
+      text: "Total Cost"
+    below:
+      text: "Delivery Fee"

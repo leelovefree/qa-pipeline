@@ -40,10 +40,11 @@ Not asserted (per ticket): Subtotal, Delivery Fee display, color, wishlist, prom
 - **confidence:** high
 
 ### CART.BUY_NOW.NO_CONFIRMATION_MESSAGE
-- **Given/When/Then:** Given a product detail page, When the customer taps "Buy Now", Then no confirmation message is shown.
+- **Given/When/Then:** Given a product detail page, When the customer taps "Buy Now", Then the app shows the "My Cart" screen with no confirmation message (alert, dialog, toast, banner) on that screen. Messages on other screens (e.g. after navigating back to the product page) are out of scope.
 - **source_ticket:** SCRUM-6
 - **source_span:** "No confirmation message is shown."
-- **confidence:** high
+- **confidence:** medium
+- **note:** Scope narrowed to the cart screen on 2026-09-30 (human-approved, Stage 4 triage): the ticket does not say which screen the statement applies to. The product page shows "Added to cart" after Back; not asserted.
 
 ### CART.BUY_NOW.MERGE_SAME_PRODUCT
 - **Given/When/Then:** Given the cart already contains a line for product P with quantity A, When the customer adds product P again with selected quantity N via "Buy Now", Then the cart still has exactly one line for P and its quantity is A + N.

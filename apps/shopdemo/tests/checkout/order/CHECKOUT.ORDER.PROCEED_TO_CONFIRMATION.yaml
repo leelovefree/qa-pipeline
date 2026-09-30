@@ -1,0 +1,48 @@
+# Requirement: CHECKOUT.ORDER.PROCEED_TO_CONFIRMATION
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/checkout/order/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# Place-order action label observed: "Place Order". Checkout needs no input (address/payment are
+# prefilled demo values), and none of its contents are asserted.
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1
+- tapOn: "Defile Lux Blazer"
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Defile Lux Blazer"
+# Step 2
+- tapOn:
+    id: cart_screen
+    text: "Proceed to Checkout"
+- assertVisible:
+    id: checkout_screen
+    text: "Checkout"
+# Step 3
+- tapOn:
+    id: checkout_screen
+    text: "Place Order"
+- assertVisible:
+    id: order_confirmed_screen
+    text: "Order Confirmed!"

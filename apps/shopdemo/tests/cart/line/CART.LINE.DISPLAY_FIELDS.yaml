@@ -1,0 +1,59 @@
+# Requirement: CART.LINE.DISPLAY_FIELDS
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/cart/line/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# Product P = "Defile Lux Blazer", category "Women Fashion", price "$300" (observed on home and PDP).
+# Cart row children all share the row id `cart_item_row_defile-lux-blazer-s-beige`.
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1: pin name / category / price read from screen
+- assertVisible:
+    id: "home_product_item_defile-lux-blazer"
+    text: "Women Fashion"
+- tapOn: "Defile Lux Blazer"
+- assertVisible:
+    id: product_detail_name_label
+    text: "Defile Lux Blazer"
+- assertVisible:
+    id: product_detail_price_label
+    text: "\\$300"
+# Step 2
+- tapOn:
+    id: product_detail_quantity_increment_button
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Defile Lux Blazer"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Women Fashion"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "\\$300"
+# Unit price, not line total (2 x $300)
+- assertNotVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "\\$600"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*2$"

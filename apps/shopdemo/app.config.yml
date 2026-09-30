@@ -11,7 +11,7 @@ app_id: com.qademo.iosshopdemo     # bundle id / package name — every flow's `
 #   GitHub release  gh-release:<owner>/<repo>@<tag|latest>/<asset>   (auth via $GH_TOKEN / gh auth)
 build: gh-release:leelovefree/ios-shop-demo@latest/ShopDemo.app.zip
 
-ios_device: iPhone 16              # simulator booted when none is running
+ios_device: iPhone 17              # simulator booted when none is running
 
 tracker_mcp_server: atlassian-personal   # personal Jira (linhdngen.atlassian.net), NOT the company Rovo connector
 tracker_project_key: SCRUM

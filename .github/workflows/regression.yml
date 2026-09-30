@@ -23,6 +23,10 @@ on:
         description: "Only run flows with these Maestro tags (comma-separated). Empty = all."
         type: string
         default: ""
+      exclude_tags:
+        description: "Skip flows with these tags. Default `known-bug`: a flow failing on a confirmed, ticketed app bug (keep the ticket key in the flow header). Local `bin/qa run` still runs them."
+        type: string
+        default: "known-bug"
       runner:
         type: string
         default: macos-15
@@ -53,11 +57,13 @@ jobs:
           BUILD: ${{ inputs.build }}
           MODULE: ${{ inputs.module }}
           TAGS: ${{ inputs.tags }}
+          EXCLUDE_TAGS: ${{ inputs.exclude_tags }}
         run: |
           args=()
           [ -z "$BUILD" ]  || args+=(--build "$BUILD")
           [ -z "$MODULE" ] || args+=(--module "$MODULE")
           [ -z "$TAGS" ]   || args+=(--tags "$TAGS")
+          [ -z "$EXCLUDE_TAGS" ] || args+=(--exclude-tags "$EXCLUDE_TAGS")
           echo "Testing app=$APP build=${BUILD:-<from app.config.yml>}"
           bin/qa run "$APP" ${args[@]+"${args[@]}"}
 

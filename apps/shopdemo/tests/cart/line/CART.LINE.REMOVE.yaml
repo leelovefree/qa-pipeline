@@ -1,0 +1,62 @@
+# Requirement: CART.LINE.REMOVE
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/cart/line/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# A = "Defile Lux Blazer" (row id cart_item_row_defile-lux-blazer-s-beige),
+# B = "Neck Short Sleeves" (row id cart_item_row_neck-short-sleeves-s-blue). Trash icon text "Trash".
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1: add A x1
+- tapOn: "Defile Lux Blazer"
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+# Step 2: back to home, add B x1
+- tapOn:
+    id: cart_screen
+    text: "Back"
+- tapOn:
+    id: product_detail_back_button
+- assertVisible:
+    id: home_screen
+- tapOn: "Neck Short Sleeves"
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Defile Lux Blazer"
+- assertVisible:
+    id: cart_item_row_neck-short-sleeves-s-blue
+    text: "Neck Short Sleeves"
+# Step 3: remove A
+- tapOn:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Trash"
+- assertNotVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+- assertNotVisible: "Defile Lux Blazer"
+- assertVisible:
+    id: cart_item_row_neck-short-sleeves-s-blue
+    text: "Neck Short Sleeves"
+- assertVisible:
+    id: cart_item_row_neck-short-sleeves-s-blue
+    text: "^0*1$"
+- assertNotVisible: "Your cart is empty"

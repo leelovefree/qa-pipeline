@@ -1,0 +1,39 @@
+# Requirement: PDP.QUANTITY.NO_UPPER_LIMIT
+# Ticket: SCRUM-6 | Spec: apps/shopdemo/specs/SCRUM-6/spec.md | Case: apps/shopdemo/tests/pdp/quantity/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
+# Quantity label is zero-padded (observed "01"); matched as "^0*21$" (anchored).
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+- tapOn: "Defile Lux Blazer"
+- assertVisible:
+    id: product_detail_screen
+- repeat:
+    times: 20
+    commands:
+      - tapOn:
+          id: product_detail_quantity_increment_button
+- assertVisible:
+    id: product_detail_quantity_value_label
+    text: "^0*21$"
+- assertVisible:
+    id: product_detail_quantity_increment_button
+    enabled: true
+# Bounded negative check: no cap/limit message.
+- assertNotVisible: ".*(maximum|max\\.|limit).*"
