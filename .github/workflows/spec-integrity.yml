@@ -1,0 +1,35 @@
+name: Spec integrity (no AI)
+
+# A PR that changes a spec AND a flow in the same change looks like "edit the spec to make the test pass".
+# It is allowed only with the `spec-change-approved` label, which a human adds after triaging the failure
+# (see docs/huong-dan-qa-pipeline.md section 9.1). New specs (added files) are not flagged.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+jobs:
+  spec-and-flow-together:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Block spec edits bundled with flow edits
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          specs=$(git diff --name-only --diff-filter=MDR "$BASE" "$HEAD" -- 'apps/*/specs/**/spec.md')
+          flows=$(git diff --name-only --diff-filter=MDR "$BASE" "$HEAD" -- 'apps/*/tests/**/*.yaml')
+          if [ -n "$specs" ] && [ -n "$flows" ]; then
+            case ",$LABELS," in
+              *,spec-change-approved,*) echo "spec-change-approved present — allowed."; exit 0 ;;
+            esac
+            echo "::error::This PR modifies existing spec(s) and flow(s) together without the 'spec-change-approved' label."
+            echo "Specs:"; echo "$specs"; echo "Flows:"; echo "$flows"
+            exit 1
+          fi
+          echo "OK"

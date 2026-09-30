@@ -48,6 +48,12 @@ Stage 6 — the test runner decides, not an LLM. `bin/qa` returns Maestro's own 
 in anything that can turn a failure into a pass, and never add `maestro test --analyze` (AI) to CI.
 `bin/qa install` refuses a build whose bundle id differs from the app's `app_id`.
 
+Spec integrity — a failing test is never fixed by editing its spec. No agent edits `spec.md`, a CASES.md
+expected result, or a flow assertion to turn a failing test into a passing one. Spec changes come from the
+source ticket (re-run Stage 2) or a human-approved PR that states the reason. Triage every fail first:
+A app bug → bug ticket, test stays red; B ticket wrong → fix ticket, re-run Stage 2; C AI misread ticket →
+spec PR with reason; D requirement really changed → new ticket. See `docs/huong-dan-qa-pipeline.md` §9.1.
+
 Stage 7 (future) — a repair-agent's self-report is never trusted on its own:
 ```js
 if (!replay.passed) review.approved = false;
