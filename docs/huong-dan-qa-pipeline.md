@@ -1,7 +1,10 @@
-# Hướng dẫn xây dựng & sử dụng QA automation platform
+# Hướng dẫn QA pipeline — xây dựng & sử dụng
 
 Dành cho QA mới tham gia: dựng lại toàn bộ hệ thống từ đầu trên một máy Mac mới, thêm một app cần test, và
 đưa một ticket Jira đi hết pipeline cho tới khi test chạy tự động trên CI.
+
+> Phần việc của **dev** (build và giao bản build cho QA) nằm ở hướng dẫn riêng:
+> [`huong-dan-dev-ios.md`](huong-dan-dev-ios.md). QA gửi file đó cho team dev của app cần test.
 
 ---
 
@@ -127,7 +130,9 @@ qa-pipeline/
     specs/  tests/  reports/
   templates/app/                  # mẫu để thêm app mới
   docs/requirements.md            # spec thiết kế đầy đủ
-  docs/huong-dan-xay-dung.md      # file này
+  docs/huong-dan-qa-pipeline.md   # file này (cho QA)
+  docs/huong-dan-dev-ios.md       # hướng dẫn cho dev: build & giao bản build
+  templates/dev-ios/              # workflow mẫu cho repo app
   .gitignore                      # .qa-work/
 ```
 
@@ -169,16 +174,53 @@ Các kiểu giá trị của `build:`:
 > ⚠️ iOS simulator **không chạy được `.ipa`**. File `.ipa` là bản build cho máy thật. Cần xin dev bản build
 > simulator (`.app`, nén zip).
 
-### 4.2 Phía repo app (nhờ dev)
+### 4.2 Chuẩn bị bản build để test (phía QA)
 
-1. **Bản build simulator:** thêm workflow build `-sdk iphonesimulator` → `ditto -c -k --keepParent X.app X.app.zip` →
-   `gh release create`. Mẫu: `ios-shop-demo/.github/workflows/release-build.yml`.
-2. **Accessibility identifier ổn định** cho mọi element cần test (vd `login_email_field`). Đổi ID là test hỏng,
-   nên dev phải báo QA trước.
-3. (Tuỳ chọn) **Báo repo QA khi có build mới** bằng `repository_dispatch`, event `<app>-build`, payload
-   `{"build": "<link build>"}`.
+**a. Nhận bản build.** Có 3 cách, tuỳ theo cách team dev giao build:
 
-### 4.3 Token (secrets)
+| Nguồn | Cách lấy | Ghi vào `build:` hoặc `--build` |
+|---|---|---|
+| GitHub Release của repo app (khuyến nghị) | Tự động, `bin/qa` tự tải về | `gh-release:<org>/<app-repo>@latest/<App>.app.zip`, hoặc `@build-42/...` để chọn đúng một bản |
+| Link tải (S3, Firebase, server nội bộ) | Dev gửi link | `https://…/App.app.zip`. Nếu link cần đăng nhập, đặt token vào `QA_BUILD_TOKEN` |
+| File dev gửi trực tiếp | Tải về máy | `~/Downloads/App.app.zip` (chỉ dùng trên máy, CI không đọc được) |
+
+Xem các bản build đã có trên GitHub Release:
+```bash
+gh release list -R <org>/<app-repo> -L 5
+```
+
+**b. Kiểm tra bản build trước khi dùng** (chỉ cần làm với file lạ, dev mới gửi lần đầu):
+```bash
+ditto -x -k App.app.zip /tmp/check && cd /tmp/check/*.app
+plutil -extract DTPlatformName raw Info.plist      # phải là: iphonesimulator   (iphoneos = bản máy thật, không dùng được)
+plutil -extract CFBundleIdentifier raw Info.plist  # phải trùng app_id trong app.config.yml
+```
+`bin/qa` cũng tự chặn file `.ipa` và bản build sai `app_id`, nên không lo chạy nhầm app.
+
+**c. Chọn bản build khi chạy.**
+- **Mặc định:** dùng `build:` trong `apps/<app>/app.config.yml`, thường là `@latest`. CI hằng đêm và CI trên PR
+  dùng giá trị này.
+- **Bản cụ thể cho một lần chạy:** dùng `bin/qa run <app> --build <path|link|gh-release:…>`, không cần sửa config.
+- **Bản cụ thể trên CI:** vào Actions, chọn `App: <app>`, bấm *Run workflow*, rồi nhập build.
+- **Khi dev publish build mới:** CI tự test đúng bản đó (xem mục 7), QA không cần làm gì.
+
+**d. Mở app bằng tay để xem trước khi viết test:**
+```bash
+bin/qa install <app>            # hoặc: --build <...>
+xcrun simctl launch booted <app_id>
+```
+
+### 4.3 Phía repo app (dev làm)
+
+Gửi team dev file [`huong-dan-dev-ios.md`](huong-dan-dev-ios.md). QA cần dev đáp ứng 4 điều:
+
+- [ ] Có bản build **simulator** (`.app.zip`) cho mỗi version, không chỉ `.ipa`.
+- [ ] Bản build nằm ở chỗ QA tải được: GitHub Release (dùng workflow mẫu `templates/dev-ios/release-build.yml`) hoặc
+  một link cố định.
+- [ ] **Accessibility identifier ổn định** cho mọi element cần test. Đổi ID thì phải báo QA trước.
+- [ ] (Tuỳ chọn) Báo repo QA mỗi khi có build mới, bằng `repository_dispatch` event `<app>-build`.
+
+### 4.4 Token (secrets)
 
 Nếu cả hai repo đều private, cần 1 **fine-grained PAT** (GitHub → Settings → Developer settings → Fine-grained
 tokens), quyền `Contents: Read and write` trên repo app và repo QA:
@@ -190,7 +232,7 @@ gh secret set QA_DISPATCH_TOKEN -R <org>/<app-repo>      # repo app báo cho rep
 
 (`gh secret set` sẽ hỏi giá trị, nên không cần dán token vào đâu khác. Không bao giờ commit token vào repo.)
 
-### 4.4 Kiểm tra
+### 4.5 Kiểm tra
 
 ```bash
 bin/qa apps                 # thấy <app>
@@ -288,6 +330,7 @@ Kết quả pass/fail là **exit code của Maestro**. Không có bước AI nà
 | MCP maestro lỗi `ENOENT` | `claude mcp add` phải dùng đường dẫn tuyệt đối `~/.maestro/bin/maestro` |
 | `Unable to locate a Java Runtime` / test fail lạ | Chưa set `JAVA_HOME` sang JDK 17 |
 | MCP báo `Device became unreachable` | Đã reboot simulator giữa session. Mở session Claude Code mới |
+| Simulator hiện hàng loạt "quit unexpectedly" (app, SpringBoard, SafariViewService), crash trong `XCTAutomationSupport` | Có hai kết nối Maestro cùng lúc: chạy lệnh `maestro` CLI (`hierarchy`, `test`, `bin/qa`) trong khi một session Claude Code đang giữ Maestro MCP. Bấm OK, restart simulator, và chỉ dùng một trong hai tại một thời điểm |
 | `Jira MCP` không login được | `claude mcp login` phải chạy trong terminal thật (cần mở trình duyệt) |
 | `is a device build (.ipa)` | Cần bản build simulator (`.app.zip`) |
 | `build is 'X' but … expects app_id 'Y'` | Trỏ nhầm build của app khác, sửa `build:` hoặc `app_id` |

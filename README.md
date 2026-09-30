@@ -9,7 +9,8 @@ ticket ─► spec.md ─► CASES.md ─► <case>.yaml ─► PR (human) ─�
 Stage 1   Stage 2     Stage 3      Stage 4        Stage 5          Stage 6
 ```
 
-- **New here?** Start with the onboarding / rebuild guide: [`docs/huong-dan-xay-dung.md`](docs/huong-dan-xay-dung.md).
+- **New QA?** Start with [`docs/huong-dan-qa-pipeline.md`](docs/huong-dan-qa-pipeline.md) (setup, onboarding an app, running a ticket end to end).
+- **App developer?** Send them [`docs/huong-dan-dev-ios.md`](docs/huong-dan-dev-ios.md) — how to build and hand over builds for QA (template: `templates/dev-ios/`).
 - Rules and layout: [`CLAUDE.md`](CLAUDE.md). Full design spec: [`docs/requirements.md`](docs/requirements.md).
 
 ## Quick start

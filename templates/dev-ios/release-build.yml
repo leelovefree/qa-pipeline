@@ -1,0 +1,59 @@
+name: Release build for QA
+
+# Template for an iOS app repo (dev-owned). Copy to .github/workflows/release-build.yml and replace:
+#   __SCHEME__     Xcode scheme to build            (e.g. ShopDemo)
+#   __PROJECT__    -project X.xcodeproj  or  -workspace X.xcworkspace
+#   __APP__        folder name of this app in the QA repo, apps/<app>/  (e.g. shopdemo)
+#   __QA_REPO__    QA repo, <org>/<repo>              (e.g. leelovefree/qa-pipeline)
+# Guide: docs/huong-dan-dev-ios.md in the QA repo.
+#
+# What it does: build a *simulator* .app → zip it → GitHub Release `build-<n>` (latest) → notify the QA repo.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # create the release
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      TAG: build-${{ github.run_number }}
+      ZIP: __SCHEME__.app.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+
+      # Add your own setup here if needed (xcodegen generate, pod install, SPM resolve, secrets for staging config…)
+
+      - name: Build simulator app
+        run: |
+          xcodebuild __PROJECT__ -scheme __SCHEME__ -sdk iphonesimulator \
+            -configuration Release -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build
+          APP=$(find build/Build/Products/Release-iphonesimulator -maxdepth 1 -name '*.app' | head -1)
+          [ "$(plutil -extract DTPlatformName raw "$APP/Info.plist")" = iphonesimulator ]
+          ditto -c -k --keepParent "$APP" "$ZIP"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" "$ZIP" --target "$GITHUB_SHA" --latest \
+            --title "__SCHEME__ $TAG" \
+            --notes "Simulator build of ${GITHUB_SHA::7} for QA automation."
+
+      - name: Notify QA repo
+        env:
+          GH_TOKEN: ${{ secrets.QA_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "QA_DISPATCH_TOKEN not set — skipping"; exit 0; fi
+          gh api repos/__QA_REPO__/dispatches \
+            -f event_type=__APP__-build \
+            -f "client_payload[build]=gh-release:${GITHUB_REPOSITORY}@${TAG}/${ZIP}"
