@@ -383,3 +383,4 @@ Người (không phải AI) phân loại mỗi lần fail trước khi làm gì 
 | Kỹ thuật thiết kế test (negative, boundary, equivalence) | Phase 3 (`case-designer`) | Tăng chất lượng case, không ảnh hưởng độ ổn định. |
 | Cache Maestro/JDK trong CI, tag `smoke`, job summary, `bin/qa new-app` | Khi CI chậm hoặc có nhiều app | Tối ưu tốc độ và tiện lợi. |
 | `DeviceUnreachableException` khi chạy local | Khi gặp lại | Dùng một Maestro client tại một thời điểm. |
+| CI chạy lâu (~12 phút / 22 flow, tuần tự) | Khi vượt ~20 phút hoặc có app thứ hai | Chia matrix theo module để chạy song song (~4-5 phút), rồi cache Maestro/JDK. Không dùng chung trạng thái đăng nhập giữa các case. |
