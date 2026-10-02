@@ -30,6 +30,11 @@ on:
       module:
         description: "Only this module under apps/__APP__/tests/. Empty = all."
         default: ""
+      scope:
+        description: "smoke = happy-path flows tagged `smoke`; full = every flow."
+        type: choice
+        options: [smoke, full]
+        default: smoke
 
 jobs:
   test:
@@ -38,4 +43,6 @@ jobs:
       app: __APP__
       build: ${{ github.event.client_payload.build || inputs.build || '' }}
       module: ${{ inputs.module || '' }}
+      # PR / push / dispatch / manual run → smoke (fast). Nightly and scope=full → every flow (empty tags).
+      tags: ${{ (github.event_name != 'schedule' && inputs.scope != 'full') && 'smoke' || '' }}
     secrets: inherit

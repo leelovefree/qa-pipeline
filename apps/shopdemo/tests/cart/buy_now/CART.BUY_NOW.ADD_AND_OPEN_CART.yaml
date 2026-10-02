@@ -4,6 +4,8 @@
 # Product P = first home product "Defile Lux Blazer". Cart row children all share the row id
 # `cart_item_row_defile-lux-blazer-s-beige`; quantity label is zero-padded ("03"), matched "^0*3$".
 appId: com.qademo.iosshopdemo
+tags:
+  - smoke
 ---
 - launchApp:
     clearState: true

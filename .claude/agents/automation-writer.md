@@ -57,7 +57,11 @@ Each flow starts with a header so one grep finds requirement, case and script to
 # Requirement: <REQUIREMENT_ID>
 # Ticket: <TICKET-ID> | Spec: apps/<app>/specs/<TICKET-ID>/spec.md | Case: apps/<app>/tests/<module>/<feature>/CASES.md
 appId: <app_id>
+tags:        # only for a happy-path case (the main success flow of a feature) — CI runs these on every PR
+  - smoke
 ```
+Tag `smoke` sparingly: one or two per module, only the core success path. Edge/negative cases stay untagged
+(they run in the nightly full run). Never add `smoke` or remove a tag to change a test's outcome.
 Before handing over, run the new flows once for real: `bin/qa run <app> --module <module> --no-install`
 and report the actual result.
 

@@ -4,6 +4,8 @@
 # A = "Defile Lux Blazer" (row id cart_item_row_defile-lux-blazer-s-beige),
 # B = "Neck Short Sleeves" (row id cart_item_row_neck-short-sleeves-s-blue). Trash icon text "Trash".
 appId: com.qademo.iosshopdemo
+tags:
+  - smoke
 ---
 - launchApp:
     clearState: true
