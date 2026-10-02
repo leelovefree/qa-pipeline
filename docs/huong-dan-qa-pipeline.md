@@ -371,5 +371,16 @@ Người (không phải AI) phân loại mỗi lần fail trước khi làm gì 
 - **Stage 7 — repair-agent:** tự sửa test khi chỉ đổi selector, từ chối khi app có lỗi thật.
 - **Stage 8 — reporter:** báo cáo mỗi lần chạy (model, số lần thử, chi phí, người duyệt).
 - **Android runner** trong `bin/qa`.
-- Script kiểm tra độ phủ (mọi ID trong spec đều có trong CASES.md) chạy trên CI.
+- ~~Script kiểm tra độ phủ~~ — xong: `bin/qa-check` (độ phủ spec → CASES.md; flow `known-bug` phải có ticket), chạy trên CI qua `qa-check.yml`.
 - Tiêu chí "atomic rule" và kỹ thuật thiết kế test (negative, boundary) cho các agent.
+
+### Đã đánh giá, hoãn có chủ đích (làm khi workflow đã ổn định)
+
+| Việc | Khi nào làm | Ghi chú |
+|---|---|---|
+| Thử một ticket cố tình mơ hồ (kiểm chứng cổng Stage 2) | Trước khi demo | Nguyên tắc 2 chưa từng được thử thật. |
+| Tiêu chí "atomic rule" cho `spec-extractor` | Cùng lúc với bước trên | Chỉ cần thêm tiêu chí và ví dụ vào prompt. |
+| Kỹ thuật thiết kế test (negative, boundary, equivalence) | Phase 3 (`case-designer`) | Tăng chất lượng case, không ảnh hưởng độ ổn định. |
+| Cache Maestro/JDK trong CI, tag `smoke`, job summary, `bin/qa new-app` | Khi CI chậm hoặc có nhiều app | Tối ưu tốc độ và tiện lợi. |
+| `DeviceUnreachableException` khi chạy local | Khi gặp lại | Dùng một Maestro client tại một thời điểm. |
+| CI chạy lâu (~12 phút / 22 flow, tuần tự) | Khi vượt ~20 phút hoặc có app thứ hai | Chia matrix theo module để chạy song song (~4-5 phút), rồi cache Maestro/JDK. Không dùng chung trạng thái đăng nhập giữa các case. |

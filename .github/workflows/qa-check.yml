@@ -1,0 +1,14 @@
+name: QA static checks (no AI, no device)
+
+# Runs bin/qa-check: every spec rule has a case; every known-bug flow names a bug ticket.
+# Fast and device-free, so it runs on every PR regardless of paths.
+
+on:
+  pull_request:
+
+jobs:
+  qa-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bin/qa-check

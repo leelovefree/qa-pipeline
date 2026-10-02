@@ -6,7 +6,7 @@
 # enabled:false flag); tapping it is a no-op (quantity stays 01, line stays). The `enabled: false`
 # assertions below follow the spec ("−" is disabled at quantity 1) and are expected to FAIL against
 # this build until the app disables the control (or exposes the disabled state). Do not remove them.
-# Known-bug: <BUG-TICKET-KEY> — app does not disable "−" at quantity 1. Remove the `known-bug` tag when fixed.
+# Known-bug: SCRUM-7 — app does not disable "−" at quantity 1. Remove the `known-bug` tag when fixed.
 appId: com.qademo.iosshopdemo
 tags:
   - known-bug
