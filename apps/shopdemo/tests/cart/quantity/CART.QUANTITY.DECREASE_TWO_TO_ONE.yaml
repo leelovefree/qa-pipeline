@@ -1,0 +1,46 @@
+# Requirement: CART.QUANTITY.DECREASE_TWO_TO_ONE
+# Ticket: SCRUM-8 | Spec: apps/shopdemo/specs/SCRUM-8/spec.md | Case: apps/shopdemo/tests/cart/quantity/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-10-02.
+# Row "−" is the row element with text "Remove"; quantity labels zero-padded ("02"), matched "^0*<n>$".
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1: quantity 2 set on the PDP (not via cart "+"), then Buy Now
+- tapOn: "Defile Lux Blazer"
+- tapOn:
+    id: product_detail_quantity_increment_button
+- assertVisible:
+    id: product_detail_quantity_value_label
+    text: "^0*2$"
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*2$"
+# Step 2: tap "−" once
+- tapOn:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Remove"
+# Expected: quantity shows 1
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*1$"
