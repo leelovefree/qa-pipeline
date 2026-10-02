@@ -72,6 +72,30 @@ fetch_build() {
   printf '%s' "${ref%/}"
 }
 
+# Boot a simulator with a hard ceiling: `simctl bootstatus` can hang forever on CI runners.
+# Ceiling QA_BOOT_TIMEOUT seconds (default 180) per attempt, 2 attempts, then fail loudly.
+boot_sim() {
+  local udid="$1" limit="${QA_BOOT_TIMEOUT:-180}" attempt pid waited
+  for attempt in 1 2; do
+    xcrun simctl boot "$udid" 2>/dev/null || true
+    xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1 &
+    pid=$!
+    waited=0
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$limit" ]; do sleep 2; waited=$((waited + 2)); done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      log "simulator boot exceeded ${limit}s (attempt $attempt/2) — shutting down"
+    elif wait "$pid"; then
+      return 0
+    else
+      log "simulator bootstatus failed (attempt $attempt/2)"
+    fi
+    xcrun simctl shutdown "$udid" 2>/dev/null || true
+  done
+  die "simulator $udid did not finish booting after 2 attempts"
+}
+
 # Pick the simulator: --device (name or UDID) > an already-booted one > ios_device from config (booted).
 ios_udid() {
   local want="${DEVICE:-}" udid
@@ -87,8 +111,7 @@ ios_udid() {
     udid=$(xcrun simctl list devices available | grep -F "    $want (" | grep -oE '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}' | head -1 || true)
     [ -n "$udid" ] || die "simulator '$want' not found (xcrun simctl list devices available)"
   fi
-  xcrun simctl boot "$udid" 2>/dev/null || true
-  xcrun simctl bootstatus "$udid" -b >/dev/null
+  boot_sim "$udid" >&2
   printf '%s' "$udid"
 }
 
