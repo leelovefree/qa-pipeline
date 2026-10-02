@@ -4,6 +4,8 @@
 # Place-order action label observed: "Place Order". Checkout needs no input (address/payment are
 # prefilled demo values), and none of its contents are asserted.
 appId: com.qademo.iosshopdemo
+tags:
+  - smoke
 ---
 - launchApp:
     clearState: true

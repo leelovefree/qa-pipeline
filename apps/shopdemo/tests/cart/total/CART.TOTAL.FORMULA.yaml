@@ -6,6 +6,8 @@
 # with the other summary values, so it is located as the element right of "Total Cost" and below
 # "Delivery Fee" (Sub-total value sits above Delivery Fee).
 appId: com.qademo.iosshopdemo
+tags:
+  - smoke
 ---
 - launchApp:
     clearState: true

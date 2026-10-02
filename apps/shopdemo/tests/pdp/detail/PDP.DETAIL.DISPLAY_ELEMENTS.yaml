@@ -3,6 +3,8 @@
 # Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-09-30.
 # First product on home = "Defile Lux Blazer" ($300). Name/price asserted by id and non-empty text.
 appId: com.qademo.iosshopdemo
+tags:
+  - smoke
 ---
 - launchApp:
     clearState: true

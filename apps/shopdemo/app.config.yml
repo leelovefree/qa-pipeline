@@ -9,7 +9,7 @@ app_id: com.qademo.iosshopdemo     # bundle id / package name — every flow's `
 #   local path      ./builds/ShopDemo.app.zip  or  /abs/path/ShopDemo.app   (iOS: simulator build)
 #   https URL       https://.../ShopDemo.app.zip   (optional bearer token from $QA_BUILD_TOKEN)
 #   GitHub release  gh-release:<owner>/<repo>@<tag|latest>/<asset>   (auth via $GH_TOKEN / gh auth)
-build: gh-release:leelovefree/ios-shop-demo@latest/ShopDemo.app.zip
+build: gh-release:leelovefree/ios-shop-demo@build-1/ShopDemo.app.zip
 
 ios_device: iPhone 17              # simulator booted when none is running
 
