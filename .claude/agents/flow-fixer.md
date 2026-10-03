@@ -15,6 +15,8 @@ re-runs the flow after you finish and its exit code is the only verdict.
   `extendedWaitUntil` / a scroll, correct step order or a stale `id:`.
 - Before changing any selector, call the Maestro MCP `inspect_screen` against the booted simulator and use the
   identifier you actually read back. Never write a selector from memory or by guessing.
+- You may call the Maestro MCP `run` only to navigate the simulator to the screen you need to inspect (log in, open
+  the product, …). Do not use it to check whether the flow passes — the runner decides that.
 
 ## Forbidden — the orchestrator rejects and reverts the whole attempt if you do any of these
 
