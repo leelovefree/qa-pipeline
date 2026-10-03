@@ -1,0 +1,511 @@
+#!/usr/bin/env python3
+"""qa-auto — drive tickets through the pipeline unattended (Stages 2 → 3/4 → 6-local → fix → PR).
+
+  bin/qa-auto poll [--once] [--interval 300]   watch Jira (JQL from app.config.yml `auto_jql`) and advance tickets
+  bin/qa-auto run <TICKET> [--app <app>]       advance one ticket as far as it can go right now
+  bin/qa-auto status                           show tracked tickets
+
+Human gates (never skipped): ambiguity → comment + wait for an answer; spec clear → wait for the QA label
+`qa-approved`; PR → a human merges. Pass/fail is decided ONLY by `bin/qa` exit code, never by an LLM.
+
+Every stage is its own `claude -p` session (one session per stage). Each session has an explicit tool allowlist and a
+$ ceiling. Work happens IN YOUR CHECKOUT on branch qa/<TICKET> (created from origin/main), so the files appear under
+apps/<app>/... where you can open them. Refuses to start unless you are on main or qa/<TICKET> with no tracked changes.
+The current stage is read from the files on branch qa/<TICKET> (+ the PR), not from a state file, so you can switch
+between this runner and manual work: remove the `qa-auto` label = you own the ticket; add it back = it continues from where
+the files say it is. A ticket labelled `qa-error` is skipped — remove that label to retry.
+Jira credentials come from ~/.config/qa-auto/env (JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN) — never from the repo.
+"""
+import argparse
+import base64
+import fcntl
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+from collections import Counter
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+AUTO = ROOT / ".qa-work" / "auto"
+STATE_FILE = AUTO / "state.json"
+MAX_FIX_ATTEMPTS = 3
+STAGE_TIMEOUT = {"spec": 15 * 60, "build": 60 * 60, "fix": 20 * 60}
+STAGE_BUDGET_USD = {"spec": 1.5, "build": 12.0, "fix": 4.0}
+ASSERT = re.compile(r"^\s*-?\s*assert\w*", re.I)
+
+L_OPT_IN, L_NEEDS_INFO, L_SPEC_READY = "qa-auto", "qa-needs-info", "qa-spec-ready"
+L_APPROVED, L_PR_OPEN, L_RED, L_ERROR = "qa-approved", "qa-pr-open", "qa-red", "qa-error"
+ALL_STATE_LABELS = [L_NEEDS_INFO, L_SPEC_READY, L_PR_OPEN, L_RED, L_ERROR]
+
+
+def log(msg):
+    print(f"{time.strftime('%H:%M:%S')} qa-auto: {msg}", flush=True)
+
+
+def sh(cmd, cwd=None, check=True, timeout=None):
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    if check and r.returncode:
+        raise RuntimeError(f"{' '.join(map(str, cmd))} -> {r.returncode}\n{r.stdout[-1500:]}\n{r.stderr[-1500:]}")
+    return r
+
+
+# ---------- config / Jira ----------
+
+def load_env():
+    f = Path.home() / ".config" / "qa-auto" / "env"
+    if f.exists():
+        for line in f.read_text().splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+    missing = [k for k in ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN") if not os.environ.get(k)]
+    if missing:
+        sys.exit(f"qa-auto: missing {', '.join(missing)} (put them in ~/.config/qa-auto/env, chmod 600)")
+
+
+def app_config(app):
+    cfg = {}
+    for line in (ROOT / "apps" / app / "app.config.yml").read_text().splitlines():
+        m = re.match(r"^([a-z_]+):\s*(.*?)\s*(?:\s#.*)?$", line)
+        if m:
+            cfg[m.group(1)] = m.group(2)
+    return cfg
+
+
+def app_for_ticket(key):
+    prefix = key.rsplit("-", 1)[0]
+    for cfgf in sorted((ROOT / "apps").glob("*/app.config.yml")):
+        cfg = app_config(cfgf.parent.name)
+        if cfg.get("tracker_project_key") == prefix:
+            return cfgf.parent.name
+    sys.exit(f"qa-auto: no app under apps/ has tracker_project_key={prefix}")
+
+
+def jira(method, path, body=None):
+    url = os.environ["JIRA_BASE_URL"].rstrip("/") + path
+    auth = base64.b64encode(f"{os.environ['JIRA_EMAIL']}:{os.environ['JIRA_API_TOKEN']}".encode()).decode()
+    req = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json",
+                                          "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read()
+        return json.loads(raw) if raw else {}
+
+
+def jira_comment(key, text):
+    adf = {"type": "doc", "version": 1, "content": [
+        {"type": "paragraph", "content": [{"type": "text", "text": p}]} for p in text.split("\n\n")]}
+    jira("POST", f"/rest/api/3/issue/{key}/comment", {"body": adf})
+
+
+def jira_labels(key, add=(), remove=()):
+    ops = [{"add": l} for l in add] + [{"remove": l} for l in remove]
+    jira("PUT", f"/rest/api/3/issue/{key}", {"update": {"labels": ops}})
+
+
+def jira_issue(key):
+    return jira("GET", f"/rest/api/3/issue/{key}?fields=labels,summary")
+
+
+def last_comment_id(key):
+    cs = jira("GET", f"/rest/api/3/issue/{key}/comment?orderBy=-created&maxResults=1").get("comments", [])
+    return int(cs[0]["id"]) if cs else 0
+
+
+def jira_search(jql):
+    q = urllib.parse.urlencode({"jql": jql, "fields": "labels,summary", "maxResults": 50})
+    return jira("GET", f"/rest/api/3/search/jql?{q}").get("issues", [])
+
+
+# ---------- state ----------
+
+def load_state():
+    return json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+
+
+def save_state(st):
+    AUTO.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps(st, indent=2))
+
+
+def set_stage(key, **kw):
+    st = load_state()
+    st.setdefault(key, {}).update(kw)
+    save_state(st)
+
+
+# ---------- claude sessions ----------
+
+READ_JIRA = ["mcp__atlassian-personal__getJiraIssue", "mcp__atlassian-personal__searchJiraIssuesUsingJql",
+             "mcp__atlassian-personal__getAccessibleAtlassianResources"]
+COMMENT_JIRA = ["mcp__atlassian-personal__addCommentToJiraIssue"]
+BASE_TOOLS = ["Read", "Glob", "Grep"]
+
+
+def claude(stage, key, app, cwd, prompt, agent=None, model=None, tools=()):
+    cmd = ["claude", "-p", prompt, "--output-format", "json", "--permission-mode", "dontAsk",
+           "--max-budget-usd", str(STAGE_BUDGET_USD[stage]), "--allowedTools", *tools]
+    if agent:
+        cmd += ["--agent", agent]
+    if model:
+        cmd += ["--model", model]
+    t0 = time.time()
+    r = sh(cmd, cwd=cwd, check=False, timeout=STAGE_TIMEOUT[stage])
+    try:
+        out = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        out = {"result": r.stdout[-1500:], "is_error": True}
+    rec = {"ticket": key, "stage": stage, "agent": agent, "model_requested": model or "agent-default",
+           "session_id": out.get("session_id"), "cost_usd": out.get("total_cost_usd"),
+           "seconds": round(time.time() - t0), "is_error": bool(out.get("is_error")) or r.returncode != 0}
+    d = AUTO / key
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / "runs.jsonl", "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    log(f"{key} {stage}: ${rec['cost_usd']} {rec['seconds']}s error={rec['is_error']}")
+    return out
+
+
+def total_cost(key):
+    f = AUTO / key / "runs.jsonl"
+    if not f.exists():
+        return 0.0, []
+    recs = [json.loads(l) for l in f.read_text().splitlines()]
+    return sum(r["cost_usd"] or 0 for r in recs), recs
+
+
+# ---------- git (in place, branch qa/<KEY>) ----------
+
+def current_branch():
+    return sh(["git", "branch", "--show-current"], cwd=ROOT).stdout.strip()
+
+
+def branch_exists(name):
+    return sh(["git", "rev-parse", "--verify", "-q", f"refs/heads/{name}"], cwd=ROOT, check=False).returncode == 0
+
+
+def ensure_branch(key):
+    """Put the checkout on qa/<KEY> (from origin/main). Refuses rather than touching work that isn't ours."""
+    want, cur = f"qa/{key}", current_branch()
+    if cur not in ("main", want):
+        raise RuntimeError(f"you are on branch '{cur}'. Finish or switch away (git switch main) before qa-auto works on {key}.")
+    dirty = sh(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT).stdout.strip()
+    if dirty:
+        raise RuntimeError(f"uncommitted changes to tracked files — commit or stash them first:\n{dirty[:400]}")
+    if cur != want:
+        sh(["git", "fetch", "origin", "main"], cwd=ROOT)
+        if branch_exists(want):
+            sh(["git", "switch", want], cwd=ROOT)
+        else:
+            sh(["git", "switch", "-c", want, "origin/main"], cwd=ROOT)
+    return ROOT
+
+
+def commit(wt, msg):
+    """Stage only apps/ — never sweep up unrelated files from the QA's checkout."""
+    sh(["git", "add", "-A", "--", "apps"], cwd=wt)
+    if sh(["git", "diff", "--cached", "--quiet"], cwd=wt, check=False).returncode == 0:
+        return False
+    sh(["git", "commit", "-q", "-m", msg + "\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"], cwd=wt)
+    return True
+
+
+def detect_stage(key, app):
+    """Where is this ticket, judged from the files on branch qa/<KEY> and its PR (not from a state file)?
+    none | needs_info | spec_ready | flows_ready | pr_open"""
+    prs = sh(["gh", "pr", "list", "--head", f"qa/{key}", "--state", "all", "--json", "url"], cwd=ROOT, check=False)
+    if prs.returncode == 0 and json.loads(prs.stdout or "[]"):
+        return "pr_open"
+    ref = f"qa/{key}"
+    if not branch_exists(ref):
+        return "none"
+    files = sh(["git", "ls-tree", "-r", "--name-only", ref], cwd=ROOT).stdout.split()
+    spec_dir = f"apps/{app}/specs/{key}"
+    if f"{spec_dir}/open-questions.md" in files:
+        return "needs_info"
+    if f"{spec_dir}/spec.md" not in files:
+        return "none"
+    spec = sh(["git", "show", f"{ref}:{spec_dir}/spec.md"], cwd=ROOT).stdout
+    ids = re.findall(r"^### (\S+)", spec, re.M)
+    flows = {Path(f).stem for f in files if f.startswith(f"apps/{app}/tests/") and f.endswith(".yaml")}
+    return "flows_ready" if ids and all(i in flows for i in ids) else "spec_ready"
+
+
+# ---------- stages ----------
+
+def spec_rules_text(spec_path):
+    """One paragraph per rule (ID, Given/When/Then, verbatim ticket quote, confidence) for the Jira comment."""
+    out = []
+    for block in re.split(r"^### ", spec_path.read_text(), flags=re.M)[1:]:
+        rid = block.splitlines()[0].strip()
+        field = lambda name: (re.search(rf"\*\*{name}:\*\*\s*(.+)", block) or [None, "?"])[1].strip()
+        out.append(f"• {rid}\n{field('Given/When/Then')}\nTicket text: {field('source_span')} (confidence: {field('confidence')})")
+    return "\n\n".join(out)
+
+
+def stage_spec(key, app):
+    wt = ensure_branch(key)
+    spec_dir = wt / "apps" / app / "specs" / key
+    resume = (spec_dir / "open-questions.md").exists()
+    prompt = (f"Run Stage 2 for ticket {key}, app {app}. "
+              + ("open-questions.md already exists: this is a RESUME — match the ticket's replies to the questions. " if resume else "")
+              + "If anything is ambiguous, write open-questions.md, post the questions as a ticket comment, and stop. "
+                "Otherwise write spec.md. Do not post any other comment.")
+    claude("spec", key, app, wt, prompt, agent="spec-extractor",
+           tools=BASE_TOOLS + ["Write", "Edit", f"Bash(ls:*)", *READ_JIRA, *COMMENT_JIRA])
+    spec, oq = spec_dir / "spec.md", spec_dir / "open-questions.md"
+    commit(wt, f"{key}: Stage 2 spec output\n\nTicket: {key}")
+    seen = last_comment_id(key)
+    if oq.exists():
+        jira_labels(key, add=[L_NEEDS_INFO], remove=ALL_STATE_LABELS[1:])
+        set_stage(key, app=app, stage="needs_info", last_comment=seen)
+        log(f"{key}: ambiguous → waiting for answers on the ticket")
+    elif spec.exists():
+        n = len(re.findall(r"^### \S+", spec.read_text(), re.M))
+        jira_comment(key, f"✅ Requirement clear — {n} atomic rule(s) extracted. Please review them below:\n\n"
+                          f"{spec_rules_text(spec)}\n\n"
+                          f"Full file (in the runner's repo checkout, branch qa/{key}, not pushed yet): "
+                          f"apps/{app}/specs/{key}/spec.md\n\n"
+                          f"QA: if the rules are right, add the label `{L_APPROVED}` to this ticket to generate test cases, "
+                          f"automation and open a PR. If a rule is wrong, comment the correction instead and do not add the label.")
+        jira_labels(key, add=[L_SPEC_READY], remove=[L_NEEDS_INFO])
+        set_stage(key, app=app, stage="spec_ready", last_comment=last_comment_id(key))
+        log(f"{key}: spec ready ({n} rules) → waiting for `{L_APPROVED}`")
+    else:
+        fail(key, app, "Stage 2 produced neither spec.md nor open-questions.md")
+
+
+def fail(key, app, why):
+    log(f"{key}: ERROR {why}")
+    try:
+        jira_comment(key, f"⚠️ qa-auto stopped: {why}\n\nNo further automatic steps. A human needs to look at this.")
+        jira_labels(key, add=[L_ERROR])
+    except Exception as e:  # noqa: BLE001 — reporting must not mask the original failure
+        log(f"could not report to Jira: {e}")
+    set_stage(key, app=app, stage="error", error=why)
+
+
+def changed_modules(wt, app):
+    out = sh(["git", "diff", "--name-only", "origin/main...HEAD"], cwd=wt).stdout.split()
+    # <module>/<feature> directories, so only this ticket's features run (not the whole module's older flows).
+    mods = {"/".join(p.split("/")[3:5]) for p in out if p.startswith(f"apps/{app}/tests/") and p.count("/") >= 5}
+    return sorted(mods)
+
+
+def run_tests(wt, app, mods):
+    """Returns (passed, output_tail). Verdict = bin/qa exit code only."""
+    tail = []
+    for m in mods:
+        # known-bug flows are excluded exactly as in CI (regression.yml): a ticketed app bug must not block a new PR.
+        r = sh(["bin/qa", "run", app, "--module", m, "--exclude-tags", "known-bug", "--no-install"],
+               cwd=wt, check=False, timeout=30 * 60)
+        tail.append(f"## module {m} exit={r.returncode}\n{(r.stdout + r.stderr)[-3000:]}")
+        if r.returncode != 0:
+            return False, "\n".join(tail)
+    return True, "\n".join(tail)
+
+
+def assert_lines(text):
+    return Counter(l.strip() for l in text.splitlines() if ASSERT.match(l))
+
+
+def fix_is_legit(wt, app):
+    """Code-level spec-integrity gate: a fix may only touch existing flow files and may not change any assertion."""
+    files = sh(["git", "diff", "--name-only"], cwd=wt).stdout.split()
+    untracked = sh(["git", "ls-files", "--others", "--exclude-standard", "--", "apps"], cwd=wt).stdout.split()
+    if untracked:
+        return False, f"new files created: {untracked}"
+    for f in files:
+        if not (f.startswith(f"apps/{app}/tests/") and f.endswith(".yaml")):
+            return False, f"touched forbidden file {f}"
+        old = sh(["git", "show", f"HEAD:{f}"], cwd=wt).stdout
+        if assert_lines(old) != assert_lines((wt / f).read_text()):
+            return False, f"{f}: assertion lines changed"
+    return True, ""
+
+
+def stage_build(key, app):
+    cfg = app_config(app)
+    wt = ensure_branch(key)
+    # Reuse the build already on the booted simulator; only install when the app (or a booted simulator) is missing.
+    present = sh(["xcrun", "simctl", "get_app_container", "booted", cfg["app_id"]], check=False)
+    if present.returncode == 0:
+        log(f"{key}: {cfg['app_id']} already installed on the booted simulator — skipping install")
+    else:
+        log(f"{key}: installing build {cfg.get('build')}")
+        sh(["bin/qa", "install", app], cwd=wt, timeout=30 * 60)
+
+    writer_summary = "(Stage 3/4 output already on the branch from an earlier run; not regenerated.)"
+    if not changed_modules(wt, app):
+        prompt = (f"Stages 3 and 4 for ticket {key}, app {app}. A human has APPROVED the spec "
+                  f"(label {L_APPROVED} on the ticket), so you are authorised to design CASES.md and generate the flows in "
+                  f"this one run — this replaces the 'ask before Stage 4' step. Use the booted simulator with the build "
+                  f"already installed. Keep every hard guardrail (inspect_screen before selectors, 15 actions / 5 rounds per case). "
+                  f"If a case cannot be automated within the ceiling, write it in CASES.md, skip its flow, and say so in your final message. "
+                  f"Run `bin/qa-check {app}` before finishing. Do not run the test suite — the runner does that.")
+        out = claude("build", key, app, wt, prompt, agent="automation-writer",
+                     tools=BASE_TOOLS + ["Write", "Edit", f"Bash(bin/qa-check:*)", "Bash(bin/qa install:*)", "Bash(ls:*)",
+                                         "mcp__maestro__list_devices", "mcp__maestro__inspect_screen",
+                                         "mcp__maestro__take_screenshot", "mcp__maestro__run", "mcp__maestro__cheat_sheet"])
+        writer_summary = (out.get("result") or "")[-1500:]
+        check = sh(["bin/qa-check", app], cwd=wt, check=False)
+        if check.returncode:
+            return fail(key, app, f"bin/qa-check failed after generation:\n{check.stdout[-800:]}")
+        commit(wt, f"{key}: Stage 3/4 cases + Maestro flows\n\nTicket: {key}")
+    mods = changed_modules(wt, app)
+    if not mods:
+        return fail(key, app, "automation-writer produced no flows")
+
+    passed, tail = run_tests(wt, app, mods)
+    attempts = 0
+    fix_note = ""
+    possible_app_bug = False
+    while not passed and attempts < MAX_FIX_ATTEMPTS:
+        attempts += 1
+        log(f"{key}: red → fix attempt {attempts}/{MAX_FIX_ATTEMPTS}")
+        out = claude("fix", key, app, wt,
+                     f"Failing run output:\n{tail}\n\nFix the failing flow(s) per your instructions.",
+                     agent="flow-fixer",
+                     tools=BASE_TOOLS + [f"Edit(apps/{app}/tests/**)", "mcp__maestro__list_devices",
+                                         "mcp__maestro__inspect_screen", "mcp__maestro__take_screenshot"])
+        reply = " ".join((out.get("result") or "(no reply)").split())[:600]
+        if "POSSIBLE_APP_BUG" in reply:
+            possible_app_bug = True
+        changed = sh(["git", "status", "--porcelain", "--", "apps"], cwd=wt).stdout.strip() \
+            or sh(["git", "diff", "--name-only"], cwd=wt).stdout.strip()
+        if not changed:
+            # Nothing to re-test: the flows are byte-identical. Stop instead of burning more attempts.
+            fix_note += f"- attempt {attempts}: fixer changed nothing — stopped. Fixer said: {reply}\n"
+            break
+        ok, why = fix_is_legit(wt, app)
+        if not ok:
+            # Scoped to apps/ on purpose: this runs in the QA's own checkout, never wipe their other files.
+            sh(["git", "checkout", "--", "apps"], cwd=wt)
+            sh(["git", "clean", "-fdq", "--", "apps"], cwd=wt)
+            fix_note += f"- attempt {attempts}: REJECTED by integrity gate ({why}); reverted\n"
+            break
+        commit(wt, f"{key}: fix flow selectors/timing (attempt {attempts})\n\nTicket: {key}")
+        passed, tail = run_tests(wt, app, mods)
+        fix_note += f"- attempt {attempts}: {'green' if passed else 'still red'}. Fixer said: {reply}\n"
+
+    open_pr(key, app, wt, mods, passed, attempts, fix_note, writer_summary, tail, possible_app_bug)
+
+
+def open_pr(key, app, wt, mods, passed, attempts, fix_note, writer_summary, tail, possible_app_bug=False):
+    cost, recs = total_cost(key)
+    models = ", ".join(sorted({f"{r['agent']}({r['model_requested']})" for r in recs}))
+    status = "GREEN" if passed else "RED"
+    body = f"""## {key} — automated tests ({status})
+
+- Ticket: {os.environ['JIRA_BASE_URL'].rstrip('/')}/browse/{key}
+- Modules run locally via `bin/qa` (verdict = Maestro exit code): {', '.join(mods)}
+- Auto-fix attempts: {attempts}/{MAX_FIX_ATTEMPTS}
+{fix_note}
+### Reviewer checklist
+- [ ] Each flow's assertions match its CASES.md expected result and the spec rule
+- [ ] No assertion was weakened by a fix (an integrity gate rejects this in code, but verify)
+{'- [ ] **RED**: triage per docs/huong-dan-qa-pipeline.md §9.1 (A app bug / B ticket wrong / C AI misread / D requirement changed). Do NOT edit the spec to make it pass.' if not passed else ''}
+
+### Writer notes
+{writer_summary}
+
+### Traceability
+Agents: {models} · Sessions: {', '.join(str(r['session_id']) for r in recs)} · Total cost: ${cost:.2f}
+{'' if passed else chr(10) + '<details><summary>Last failing output</summary>' + chr(10) + chr(10) + '```' + chr(10) + tail[-2500:] + chr(10) + '```' + chr(10) + '</details>'}
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+"""
+    sh(["git", "push", "-u", "origin", f"qa/{key}", "--force-with-lease"], cwd=wt)
+    cmd = ["gh", "pr", "create", "--base", "main", "--head", f"qa/{key}",
+           "--title", f"{key}: automated tests ({status.lower()})", "--body", body]
+    if not passed:
+        cmd.append("--draft")
+    url = sh(cmd, cwd=wt).stdout.strip().splitlines()[-1]
+    hint = ("\n\n⚠️ The fixer flagged a POSSIBLE APP BUG (expected result differs from app behaviour) — "
+            "triage A/B/C/D before touching any test.") if possible_app_bug else ""
+    jira_comment(key, f"🔀 PR opened ({status}): {url}\n\nLocal run: {'all flows passed' if passed else 'FAILED after ' + str(attempts) + ' auto-fix attempt(s) — needs human triage; the PR is a draft'}. "
+                      f"Nothing merges without a human approval.{hint}")
+    jira_labels(key, add=[L_PR_OPEN if passed else L_RED], remove=[L_SPEC_READY, L_APPROVED, L_ERROR])
+    set_stage(key, app=app, stage="pr_open" if passed else "pr_red", pr=url, cost_usd=round(cost, 2))
+    log(f"{key}: PR {url} ({status}), total cost ${cost:.2f}")
+
+
+# ---------- driver ----------
+
+def advance(key, app=None):
+    app = app or app_for_ticket(key)
+    labels = set(jira_issue(key)["fields"]["labels"])
+    if L_ERROR in labels:
+        return  # stopped on an error earlier; a human removes the `qa-error` label to retry
+    st = load_state().get(key, {})
+    try:
+        stage = detect_stage(key, app)
+        log(f"{key}: stage={stage} labels={sorted(labels)}")
+        if stage == "none":
+            stage_spec(key, app)
+        elif stage == "needs_info":
+            if "last_comment" not in st or last_comment_id(key) > st["last_comment"]:
+                log(f"{key}: answers may have arrived on the ticket → re-running Stage 2 (resume)")
+                stage_spec(key, app)
+        elif stage in ("spec_ready", "flows_ready"):
+            if L_APPROVED in labels:
+                stage_build(key, app)
+        # pr_open: done for the automation; a human reviews and merges
+    except subprocess.TimeoutExpired as e:
+        fail(key, app, f"stage timed out ({e.timeout}s hard ceiling)")
+    except Exception as e:  # noqa: BLE001 — any unexpected failure must stop loudly, not retry
+        fail(key, app, f"unexpected error: {str(e)[:600]}")
+
+
+def poll_once():
+    jql = None
+    for cfgf in sorted((ROOT / "apps").glob("*/app.config.yml")):
+        cfg = app_config(cfgf.parent.name)
+        jql = cfg.get("auto_jql") or f'project = {cfg["tracker_project_key"]} AND labels = {L_OPT_IN}'
+        for issue in jira_search(jql):
+            advance(issue["key"], cfgf.parent.name)
+
+
+def main():
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="cmd", required=True)
+    pp = sub.add_parser("poll")
+    pp.add_argument("--once", action="store_true")
+    pp.add_argument("--interval", type=int, default=300)
+    pr = sub.add_parser("run")
+    pr.add_argument("ticket")
+    pr.add_argument("--app")
+    sub.add_parser("status")
+    a = p.parse_args()
+
+    if a.cmd == "status":
+        for k, v in load_state().items():
+            app = v.get("app") or app_for_ticket(k)
+            print(k, f"stage={detect_stage(k, app)}", {x: y for x, y in v.items() if x in ("pr", "cost_usd", "error")})
+        return
+    load_env()
+    AUTO.mkdir(parents=True, exist_ok=True)
+    lock = open(AUTO / "lock", "w")  # one pipeline at a time: a single simulator, a single Maestro driver
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit("qa-auto: another instance is running")
+    if a.cmd == "run":
+        advance(a.ticket, a.app)
+    else:
+        while True:
+            try:
+                poll_once()
+            except Exception as e:  # noqa: BLE001 — a transient Jira/network error must not kill the daemon
+                log(f"poll error: {e}")
+            if a.once:
+                break
+            time.sleep(a.interval)
+
+
+main()

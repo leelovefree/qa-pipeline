@@ -48,7 +48,8 @@ If any rule's confidence is not high, or any part of the ticket is ambiguous (co
 criteria, missing expected values, undefined terms), you must:
 - write `apps/<app>/specs/<TICKET-ID>/open-questions.md` listing each question and the ticket text it
   came from,
-- post those questions back to the ticket as a comment via the configured tracker,
+- post those questions back to the ticket as a comment via the configured tracker (skip this one step only
+  when the prompt says `no-jira-write`: then the human posts the comment themselves),
 - and **stop** — no "best guess" rule, no Stage 3, under any configuration, even under time pressure.
 
 ## Scope limits

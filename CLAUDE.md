@@ -7,8 +7,10 @@ Full design spec: `docs/requirements.md` — read the relevant section before wo
 ## Layout
 
 ```
-.claude/agents/            spec-extractor (Stage 2), automation-writer (Stages 3+4)
+.claude/agents/            spec-extractor (Stage 2), automation-writer (Stages 3+4), flow-fixer (selector/timing repairs)
+.claude/commands/          /spec /cases /flows /run /fix /pr — manual, one session per stage
 bin/qa                     runner: install a build + run Maestro flows (same command locally and in CI)
+bin/qa-auto                 unattended driver: Jira label `qa-auto` → spec → (QA approves) → tests → PR, in your checkout on branch qa/<KEY>
 .github/workflows/
   regression.yml           Stage 6 — HOW to test (reusable, zero AI calls)
   app-<app>.yml            WHEN to test one app (dispatch from app repo, PRs, nightly, manual)

@@ -245,6 +245,21 @@ bin/qa install <app>        # tải + cài build lên simulator
 
 Quy tắc: **mỗi stage chạy trong một session Claude Code riêng**. Mở Claude Code ở thư mục gốc repo QA.
 
+### Hai cách làm một ticket (chọn cho từng ticket, đổi giữa chừng được)
+Chi tiết cách dùng tool và các lệnh: [huong-dan-qa-auto.md](huong-dan-qa-auto.md).
+
+| | Tự động (2a) | Thủ công (2b) |
+|---|---|---|
+| Kích hoạt | Gắn label `qa-auto` trên Jira, `bin/qa-auto poll` (hoặc `bin/qa-auto run <KEY>`) chạy ở máy bạn | Bạn gọi từng lệnh: `/spec`, `/cases`, `/flows`, `/run`, `/fix`, `/pr` (hoặc gọi agent như các mục dưới) |
+| Cổng người | Hỏi lại trên ticket, label `qa-approved`, review PR | Bạn dừng và đọc sau mỗi stage |
+| Jira | Tool tự comment/đổi label | Bạn tự comment (`/spec <KEY> no-jira-write`) |
+
+Cả hai làm **trên cùng branch `qa/<TICKET-ID>`, cùng file `apps/<app>/...`**:
+- Muốn tự làm tiếp: **gỡ label `qa-auto`** — poller không đụng ticket nữa.
+- Muốn giao lại cho tool: **gắn lại label `qa-auto`** — tool đọc file trên branch để biết đang ở stage nào và chạy tiếp, không làm lại từ đầu (cần label `qa-approved` để sang bước sinh flow/test/PR).
+- Tool dừng vì lỗi: ticket có label `qa-error`; sửa xong thì gỡ label đó để chạy lại.
+- `bin/qa-auto` chỉ chạy khi bạn đang ở `main` hoặc `qa/<KEY>` và không có thay đổi chưa commit; nó chiếm thư mục repo trong lúc chạy, và không chạy test tay trên simulator cùng lúc.
+
 ### Stage 1: Ticket
 Ticket cần có acceptance criteria rõ ràng, nên viết theo dạng Given/When/Then. Có giá trị mong đợi cụ thể (text
 lỗi, màn hình kết quả, …).
@@ -279,7 +294,7 @@ Use the automation-writer agent for <TICKET-ID> (app <app>), Stage 4
 
 ### Stage 5: PR
 ```bash
-git checkout -b <ticket-id>-<feature>
+git switch -c qa/<ticket-id> origin/main   # bỏ qua nếu đã ở branch qa/<ticket-id> (cùng tên với bin/qa-auto; hoặc dùng `/pr <TICKET-ID>`)
 git add apps/<app>/specs apps/<app>/tests
 git commit -m "<TICKET-ID>: <feature> spec, cases, flows"
 gh pr create
