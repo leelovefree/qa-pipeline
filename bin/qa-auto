@@ -5,8 +5,8 @@
   bin/qa-auto run <TICKET> [--app <app>]       advance one ticket as far as it can go right now
   bin/qa-auto status                           show tracked tickets
 
-Human gates (never skipped): ambiguity → comment + wait for an answer; spec clear → wait for the QA label
-`qa-approved`; PR → a human merges. Pass/fail is decided ONLY by `bin/qa` exit code, never by an LLM.
+Human gates (never skipped): ambiguity → comment + wait for an answer; spec AND test cases ready → ONE Jira comment,
+wait for the QA label `qa-approved` (approves both); PR → a human merges. Pass/fail is decided ONLY by `bin/qa` exit code, never by an LLM.
 
 Every stage is its own `claude -p` session (one session per stage). Each session has an explicit tool allowlist and a
 $ ceiling. Work happens IN YOUR CHECKOUT on branch qa/<TICKET> (created from origin/main), so the files appear under
@@ -34,13 +34,13 @@ ROOT = Path(__file__).resolve().parent.parent
 AUTO = ROOT / ".qa-work" / "auto"
 STATE_FILE = AUTO / "state.json"
 MAX_FIX_ATTEMPTS = 3
-STAGE_TIMEOUT = {"spec": 15 * 60, "build": 60 * 60, "fix": 20 * 60}
-STAGE_BUDGET_USD = {"spec": 1.5, "build": 12.0, "fix": 4.0}
+STAGE_TIMEOUT = {"spec": 15 * 60, "cases": 15 * 60, "build": 60 * 60, "fix": 20 * 60}
+STAGE_BUDGET_USD = {"spec": 1.5, "cases": 2.0, "build": 12.0, "fix": 4.0}
 ASSERT = re.compile(r"^\s*-?\s*assert\w*", re.I)
 
-L_OPT_IN, L_NEEDS_INFO, L_SPEC_READY = "qa-auto", "qa-needs-info", "qa-spec-ready"
+L_OPT_IN, L_NEEDS_INFO, L_REVIEW = "qa-auto", "qa-needs-info", "qa-ready-for-review"
 L_APPROVED, L_PR_OPEN, L_RED, L_ERROR = "qa-approved", "qa-pr-open", "qa-red", "qa-error"
-ALL_STATE_LABELS = [L_NEEDS_INFO, L_SPEC_READY, L_PR_OPEN, L_RED, L_ERROR]
+ALL_STATE_LABELS = [L_NEEDS_INFO, L_REVIEW, L_PR_OPEN, L_RED, L_ERROR]
 
 
 def log(msg):
@@ -217,7 +217,7 @@ def commit(wt, msg):
 
 def detect_stage(key, app):
     """Where is this ticket, judged from the files on branch qa/<KEY> and its PR (not from a state file)?
-    none | needs_info | spec_ready | flows_ready | pr_open"""
+    none | needs_info | spec_ready | cases_ready | flows_ready | pr_open"""
     prs = sh(["gh", "pr", "list", "--head", f"qa/{key}", "--state", "all", "--json", "url"], cwd=ROOT, check=False)
     if prs.returncode == 0 and json.loads(prs.stdout or "[]"):
         return "pr_open"
@@ -233,18 +233,46 @@ def detect_stage(key, app):
     spec = sh(["git", "show", f"{ref}:{spec_dir}/spec.md"], cwd=ROOT).stdout
     ids = re.findall(r"^### (\S+)", spec, re.M)
     flows = {Path(f).stem for f in files if f.startswith(f"apps/{app}/tests/") and f.endswith(".yaml")}
-    return "flows_ready" if ids and all(i in flows for i in ids) else "spec_ready"
+    if ids and all(i in flows for i in ids):
+        return "flows_ready"
+    cases = set()
+    for f in files:
+        if f.startswith(f"apps/{app}/tests/") and f.endswith("/CASES.md"):
+            cases |= set(re.findall(r"^### (\S+)", sh(["git", "show", f"{ref}:{f}"], cwd=ROOT).stdout, re.M))
+    return "cases_ready" if ids and all(i in cases for i in ids) else "spec_ready"
 
 
 # ---------- stages ----------
 
-def spec_rules_text(spec_path):
-    """One paragraph per rule (ID, Given/When/Then, verbatim ticket quote, confidence) for the Jira comment."""
+def case_blocks(wt, app):
+    """Requirement ID -> its CASES.md block, across every CASES.md of the app."""
+    out = {}
+    for f in sorted((wt / "apps" / app / "tests").glob("**/CASES.md")):
+        for block in re.split(r"^### ", f.read_text(), flags=re.M)[1:]:
+            out[block.splitlines()[0].strip()] = block
+    return out
+
+
+def case_text(block):
+    """Preconditions / steps / expected result of one CASES.md block, each collapsed to a single line."""
+    if not block:
+        return "Test case: (missing)"
+    def part(start, end):
+        m = re.search(rf"\*\*{start}:\*\*\s*(.*?)\s*(?:\*\*{end}:\*\*|\n---|\Z)", block, re.S)
+        return " ".join(m.group(1).split()) if m else "?"
+    return (f"Test case — Preconditions: {part('Preconditions', 'Steps')}\n"
+            f"Steps: {part('Steps', 'Expected result')}\n"
+            f"Expected result: {part('Expected result', 'Nothing-follows')}")
+
+
+def review_rules_text(spec_path, cases):
+    """One paragraph per rule: ID, Given/When/Then, ticket quote, confidence + its test case, for the Jira comment."""
     out = []
     for block in re.split(r"^### ", spec_path.read_text(), flags=re.M)[1:]:
         rid = block.splitlines()[0].strip()
         field = lambda name: (re.search(rf"\*\*{name}:\*\*\s*(.+)", block) or [None, "?"])[1].strip()
-        out.append(f"• {rid}\n{field('Given/When/Then')}\nTicket text: {field('source_span')} (confidence: {field('confidence')})")
+        out.append(f"• {rid}\nRule: {field('Given/When/Then')}\nTicket text: {field('source_span')} (confidence: {field('confidence')})\n"
+                   f"{case_text(cases.get(rid))}")
     return "\n\n".join(out)
 
 
@@ -266,18 +294,53 @@ def stage_spec(key, app):
         set_stage(key, app=app, stage="needs_info", last_comment=seen)
         log(f"{key}: ambiguous → waiting for answers on the ticket")
     elif spec.exists():
-        n = len(re.findall(r"^### \S+", spec.read_text(), re.M))
-        jira_comment(key, f"✅ Requirement clear — {n} atomic rule(s) extracted. Please review them below:\n\n"
-                          f"{spec_rules_text(spec)}\n\n"
-                          f"Full file (in the runner's repo checkout, branch qa/{key}, not pushed yet): "
-                          f"apps/{app}/specs/{key}/spec.md\n\n"
-                          f"QA: if the rules are right, add the label `{L_APPROVED}` to this ticket to generate test cases, "
-                          f"automation and open a PR. If a rule is wrong, comment the correction instead and do not add the label.")
-        jira_labels(key, add=[L_SPEC_READY], remove=[L_NEEDS_INFO])
-        set_stage(key, app=app, stage="spec_ready", last_comment=last_comment_id(key))
-        log(f"{key}: spec ready ({n} rules) → waiting for `{L_APPROVED}`")
+        jira_labels(key, remove=[L_NEEDS_INFO])
+        log(f"{key}: spec clear → designing test cases (Stage 3)")
+        stage_cases(key, app)
     else:
         fail(key, app, "Stage 2 produced neither spec.md nor open-questions.md")
+
+
+def stage_cases(key, app):
+    """Stage 3 only: CASES.md for every spec rule, then ONE Jira comment with rules + cases for QA to approve."""
+    wt = ensure_branch(key)
+    spec = wt / "apps" / app / "specs" / key / "spec.md"
+    ids = re.findall(r"^### (\S+)", spec.read_text(), re.M)
+    prompt = (f"Stage 3 ONLY for ticket {key}, app {app}: write CASES.md entries from apps/{app}/specs/{key}/spec.md. "
+              f"Do NOT write any Maestro flow, do not use the simulator or the Maestro MCP, do not run bin/qa. "
+              f"Every rule ID in spec.md must appear as a `### <ID>` entry with Preconditions, Steps and Expected result "
+              f"in plain business language (no selectors). Directly under the 'Source spec' line of every CASES.md block you "
+              f"add, write exactly: `Status: awaiting QA approval (Stage 3, ticket {key})`. A human reviews the cases on the "
+              f"ticket before any automation is written.")
+    claude("cases", key, app, wt, prompt, agent="automation-writer",
+           tools=BASE_TOOLS + ["Write", "Edit", "Bash(ls:*)"])
+    cases = case_blocks(wt, app)
+    missing = [i for i in ids if i not in cases]
+    if missing:
+        return fail(key, app, f"Stage 3 left no CASES.md entry for: {', '.join(missing)}")
+    commit(wt, f"{key}: Stage 3 test cases\n\nTicket: {key}")
+    jira_comment(key, f"✅ Requirement clear — {len(ids)} atomic rule(s) and their test cases are below. Please review BOTH:\n\n"
+                      f"{review_rules_text(spec, cases)}\n\n"
+                      f"Files (runner's repo checkout, branch qa/{key}, not pushed yet): apps/{app}/specs/{key}/spec.md and the "
+                      f"CASES.md files under apps/{app}/tests/.\n\n"
+                      f"QA: if the rules and the test cases are right, add the label `{L_APPROVED}` — it approves the spec AND the "
+                      f"cases, and starts automation, the test run and a PR. If something is wrong there is no automatic revise "
+                      f"loop yet: remove the `{L_OPT_IN}` label, correct spec.md / CASES.md on branch qa/{key} yourself (or with "
+                      f"/spec and /cases), then add `{L_OPT_IN}` and `{L_APPROVED}` again.")
+    jira_labels(key, add=[L_REVIEW])
+    set_stage(key, app=app, stage="cases_ready", last_comment=last_comment_id(key))
+    log(f"{key}: spec + {len(ids)} case(s) ready → waiting for `{L_APPROVED}`")
+
+
+def mark_cases_approved(wt, app, key):
+    """The QA's `qa-approved` label is the approval of CASES.md — record it where the file says 'awaiting'."""
+    for f in (wt / "apps" / app / "tests").glob("**/CASES.md"):
+        t = f.read_text()
+        new = re.sub(r"^Status: awaiting QA approval.*$",
+                     lambda _m: f"Status: approved by QA (Jira label `{L_APPROVED}` on {key}); automated by the co-located "
+                                f"`<REQUIREMENT_ID>.yaml` flows (Stage 4).", t, flags=re.M)
+        if new != t:
+            f.write_text(new)
 
 
 def fail(key, app, why):
@@ -342,11 +405,13 @@ def stage_build(key, app):
 
     writer_summary = "(Stage 3/4 output already on the branch from an earlier run; not regenerated.)"
     if not changed_modules(wt, app):
-        prompt = (f"Stages 3 and 4 for ticket {key}, app {app}. A human has APPROVED the spec "
-                  f"(label {L_APPROVED} on the ticket), so you are authorised to design CASES.md and generate the flows in "
-                  f"this one run — this replaces the 'ask before Stage 4' step. Use the booted simulator with the build "
-                  f"already installed. Keep every hard guardrail (inspect_screen before selectors, 15 actions / 5 rounds per case). "
-                  f"If a case cannot be automated within the ceiling, write it in CASES.md, skip its flow, and say so in your final message. "
+        mark_cases_approved(wt, app, key)
+        prompt = (f"Stage 4 ONLY for ticket {key}, app {app}. A human has APPROVED the spec and the CASES.md entries "
+                  f"for this ticket (label {L_APPROVED} on the ticket), so you are authorised to generate the flows now — this "
+                  f"replaces the 'ask before Stage 4' step. Do not redesign or edit any CASES.md expected result. Use the "
+                  f"booted simulator with the build already installed. Keep every hard guardrail (inspect_screen before "
+                  f"selectors, 15 actions / 5 rounds per case). "
+                  f"If a case cannot be automated within the ceiling, skip its flow and say so in your final message. "
                   f"Run `bin/qa-check {app}` before finishing. Do not run the test suite — the runner does that.")
         out = claude("build", key, app, wt, prompt, agent="automation-writer",
                      tools=BASE_TOOLS + ["Write", "Edit", f"Bash(bin/qa-check:*)", "Bash(bin/qa install:*)", "Bash(ls:*)",
@@ -356,7 +421,7 @@ def stage_build(key, app):
         check = sh(["bin/qa-check", app], cwd=wt, check=False)
         if check.returncode:
             return fail(key, app, f"bin/qa-check failed after generation:\n{check.stdout[-800:]}")
-        commit(wt, f"{key}: Stage 3/4 cases + Maestro flows\n\nTicket: {key}")
+        commit(wt, f"{key}: Stage 4 Maestro flows\n\nTicket: {key}")
     mods = changed_modules(wt, app)
     if not mods:
         return fail(key, app, "automation-writer produced no flows")
@@ -430,7 +495,7 @@ Agents: {models} · Sessions: {', '.join(str(r['session_id']) for r in recs)} ·
             "triage A/B/C/D before touching any test.") if possible_app_bug else ""
     jira_comment(key, f"🔀 PR opened ({status}): {url}\n\nLocal run: {'all flows passed' if passed else 'FAILED after ' + str(attempts) + ' auto-fix attempt(s) — needs human triage; the PR is a draft'}. "
                       f"Nothing merges without a human approval.{hint}")
-    jira_labels(key, add=[L_PR_OPEN if passed else L_RED], remove=[L_SPEC_READY, L_APPROVED, L_ERROR])
+    jira_labels(key, add=[L_PR_OPEN if passed else L_RED], remove=[L_REVIEW, L_APPROVED, L_ERROR])
     set_stage(key, app=app, stage="pr_open" if passed else "pr_red", pr=url, cost_usd=round(cost, 2))
     log(f"{key}: PR {url} ({status}), total cost ${cost:.2f}")
 
@@ -452,7 +517,9 @@ def advance(key, app=None):
             if "last_comment" not in st or last_comment_id(key) > st["last_comment"]:
                 log(f"{key}: answers may have arrived on the ticket → re-running Stage 2 (resume)")
                 stage_spec(key, app)
-        elif stage in ("spec_ready", "flows_ready"):
+        elif stage == "spec_ready":
+            stage_cases(key, app)  # spec exists but no cases yet (e.g. an earlier run stopped) — no human gate before this
+        elif stage in ("cases_ready", "flows_ready"):
             if L_APPROVED in labels:
                 stage_build(key, app)
         # pr_open: done for the automation; a human reviews and merges
