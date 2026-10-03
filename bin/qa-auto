@@ -369,6 +369,30 @@ def missing_flows(wt, app, key):
     return [i for i in ids if i not in have]
 
 
+# Device/driver trouble, not a flow defect: the Maestro MCP session of a previous stage can leave the iOS driver
+# unusable, or SpringBoard crashes. Seen on SCRUM-9: every flow (even old green ones) failed with DeviceUnreachable.
+INFRA_ERR = re.compile(r"DeviceUnreachable|Device became unreachable|SpringBoard|failed to terminate|xctrunner", re.I)
+
+
+def reset_simulator(app):
+    device = app_config(app).get("ios_device", "iPhone 17")
+    sh(["xcrun", "simctl", "shutdown", "all"], check=False, timeout=120)
+    sh(["xcrun", "simctl", "boot", device], check=False, timeout=120)
+    sh(["xcrun", "simctl", "bootstatus", device, "-b"], check=False, timeout=300)
+
+
+def run_tests_resilient(wt, app, mods):
+    """run_tests, but a device/driver failure restarts the simulator and re-runs ONCE (hard ceiling).
+    The verdict is still only the exit code of bin/qa — a restart can fix the environment, never the result."""
+    passed, tail = run_tests(wt, app, mods)
+    if not passed and INFRA_ERR.search(tail):
+        log("device/driver error (not a flow failure) → restarting the simulator and re-running once")
+        reset_simulator(app)
+        passed, tail = run_tests(wt, app, mods)
+        tail = "(first run hit a device/driver error; simulator restarted and the flows re-run once)\n" + tail
+    return passed, tail
+
+
 def run_tests(wt, app, mods):
     """Returns (passed, output_tail). Verdict = bin/qa exit code only."""
     tail = []
@@ -436,18 +460,22 @@ def stage_build(key, app):
     if not mods:
         return fail(key, app, f"Stage 4 produced no flow for any rule (missing: {', '.join(missing) or 'n/a'})")
 
-    passed, tail = run_tests(wt, app, mods)
+    passed, tail = run_tests_resilient(wt, app, mods)
     attempts = 0
     fix_note = ""
     possible_app_bug = False
-    while not passed and attempts < MAX_FIX_ATTEMPTS:
+    if not passed and INFRA_ERR.search(tail):
+        # Still a device/driver error after one restart: the flows were never really exercised, so a fixer would only guess.
+        fix_note += "- device/driver error persisted after a simulator restart — flow-fixer NOT called (not a flow defect)\n"
+    while not passed and attempts < MAX_FIX_ATTEMPTS and not INFRA_ERR.search(tail):
         attempts += 1
         log(f"{key}: red → fix attempt {attempts}/{MAX_FIX_ATTEMPTS}")
         out = claude("fix", key, app, wt,
                      f"Failing run output:\n{tail}\n\nFix the failing flow(s) per your instructions.",
                      agent="flow-fixer",
                      tools=BASE_TOOLS + [f"Edit(apps/{app}/tests/**)", "mcp__maestro__list_devices",
-                                         "mcp__maestro__inspect_screen", "mcp__maestro__take_screenshot"])
+                                         "mcp__maestro__inspect_screen", "mcp__maestro__take_screenshot",
+                                         "mcp__maestro__run"])  # run only to navigate to the screen it must inspect
         reply = " ".join((out.get("result") or "(no reply)").split())[:600]
         if "POSSIBLE_APP_BUG" in reply:
             possible_app_bug = True
@@ -465,7 +493,7 @@ def stage_build(key, app):
             fix_note += f"- attempt {attempts}: REJECTED by integrity gate ({why}); reverted\n"
             break
         commit(wt, f"{key}: fix flow selectors/timing (attempt {attempts})\n\nTicket: {key}")
-        passed, tail = run_tests(wt, app, mods)
+        passed, tail = run_tests_resilient(wt, app, mods)
         fix_note += f"- attempt {attempts}: {'green' if passed else 'still red'}. Fixer said: {reply}\n"
 
     open_pr(key, app, wt, mods, passed, attempts, fix_note, writer_summary, tail, possible_app_bug, missing)
