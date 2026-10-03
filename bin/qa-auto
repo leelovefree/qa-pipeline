@@ -27,6 +27,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
 
@@ -469,14 +470,33 @@ def run_tests_resilient(wt, app, mods):
     return passed, tail
 
 
+def failure_reasons(wt, app, since):
+    """Why each flow failed, from the JUnit report bin/qa writes. The console output only says `[Failed] <flow>` —
+    without the reason neither the infra-error check nor the fixer can tell a device crash from a bad selector."""
+    report = wt / ".qa-work" / app / "report.xml"
+    if not report.exists() or report.stat().st_mtime < since:
+        return ""
+    out = []
+    try:
+        for case in ET.parse(report).getroot().iter("testcase"):
+            for bad in list(case.findall("failure")) + list(case.findall("error")):
+                msg = ((bad.text or bad.get("message") or "").strip().splitlines() or ["(no message)"])[0]
+                out.append(f"- {case.get('id') or case.get('name')}: {msg[:300]}")
+    except ET.ParseError:
+        return ""
+    return "Failure reasons (from report.xml):\n" + "\n".join(out) + "\n" if out else ""
+
+
 def run_tests(wt, app, mods):
     """Returns (passed, output_tail). Verdict = bin/qa exit code only."""
     tail = []
     for m in mods:
         # known-bug flows are excluded exactly as in CI (regression.yml): a ticketed app bug must not block a new PR.
+        t0 = time.time() - 2
         r = sh(["bin/qa", "run", app, "--module", m, "--exclude-tags", "known-bug", "--no-install"],
                cwd=wt, check=False, timeout=30 * 60)
-        tail.append(f"## module {m} exit={r.returncode}\n{(r.stdout + r.stderr)[-3000:]}")
+        reasons = failure_reasons(wt, app, t0) if r.returncode else ""
+        tail.append(f"## module {m} exit={r.returncode}\n{reasons}{(r.stdout + r.stderr)[-3000:]}")
         if r.returncode != 0:
             return False, "\n".join(tail)
     return True, "\n".join(tail)
