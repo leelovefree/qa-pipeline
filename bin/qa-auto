@@ -451,22 +451,52 @@ def missing_flows(wt, app, key):
 INFRA_ERR = re.compile(r"DeviceUnreachable|Device became unreachable|SpringBoard|failed to terminate|xctrunner", re.I)
 
 
-def reset_simulator(app):
-    device = app_config(app).get("ios_device", "iPhone 17")
-    sh(["xcrun", "simctl", "shutdown", "all"], check=False, timeout=120)
-    sh(["xcrun", "simctl", "boot", device], check=False, timeout=120)
-    sh(["xcrun", "simctl", "bootstatus", device, "-b"], check=False, timeout=300)
+SIM_NAME = "qa-auto"  # the ONLY simulator qa-auto ever creates or deletes — the QA's own simulators are never touched
+
+
+def sim_udid():
+    devs = json.loads(sh(["xcrun", "simctl", "list", "devices", "-j"]).stdout)["devices"]
+    return next((d["udid"] for ds in devs.values() for d in ds if d["name"] == SIM_NAME), None)
+
+
+def drop_simulator():
+    """Delete the dedicated simulator and any Maestro driver still pointed at it (they outlive a run: seen orphaned)."""
+    udid = sim_udid()
+    if udid:
+        sh(["pkill", "-f", f"destination id={udid}"], check=False)
+        sh(["xcrun", "simctl", "shutdown", udid], check=False, timeout=120)
+        sh(["xcrun", "simctl", "delete", udid], check=False, timeout=120)
+
+
+def fresh_simulator(app, wt):
+    """A brand-new simulator (same device type/runtime as ios_device in app.config.yml), booted, with the build installed.
+    Every phase that talks to a device starts from this clean state — no stale driver, no leftover app data."""
+    drop_simulator()
+    want = app_config(app).get("ios_device", "iPhone 17")
+    types = json.loads(sh(["xcrun", "simctl", "list", "devicetypes", "-j"]).stdout)["devicetypes"]
+    dtype = next((t["identifier"] for t in types if t["name"] == want), None)
+    devs = json.loads(sh(["xcrun", "simctl", "list", "devices", "-j"]).stdout)["devices"]
+    runtime = next((rt for rt, ds in devs.items() if "iOS" in rt and any(d["name"] == want for d in ds)), None)
+    if not dtype or not runtime:
+        raise RuntimeError(f"cannot create a '{want}' simulator: device type {dtype}, runtime {runtime}")
+    udid = sh(["xcrun", "simctl", "create", SIM_NAME, dtype, runtime]).stdout.strip()
+    sh(["xcrun", "simctl", "boot", udid], timeout=180)
+    sh(["xcrun", "simctl", "bootstatus", udid, "-b"], timeout=300)
+    log(f"fresh simulator {SIM_NAME} ({want}) {udid[:8]} booted → installing the build")
+    sh(["bin/qa", "install", app, "--device", udid], cwd=wt, timeout=30 * 60)
+    return udid
 
 
 def run_tests_resilient(wt, app, mods):
     """run_tests, but a device/driver failure restarts the simulator and re-runs ONCE (hard ceiling).
     The verdict is still only the exit code of bin/qa — a restart can fix the environment, never the result."""
+    fresh_simulator(app, wt)
     passed, tail = run_tests(wt, app, mods)
     if not passed and INFRA_ERR.search(tail):
-        log("device/driver error (not a flow failure) → restarting the simulator and re-running once")
-        reset_simulator(app)
+        log("device/driver error (not a flow failure) → new simulator and re-running once")
+        fresh_simulator(app, wt)
         passed, tail = run_tests(wt, app, mods)
-        tail = "(first run hit a device/driver error; simulator restarted and the flows re-run once)\n" + tail
+        tail = "(first run hit a device/driver error; new simulator created and the flows re-run once)\n" + tail
     return passed, tail
 
 
@@ -493,7 +523,7 @@ def run_tests(wt, app, mods):
     for m in mods:
         # known-bug flows are excluded exactly as in CI (regression.yml): a ticketed app bug must not block a new PR.
         t0 = time.time() - 2
-        r = sh(["bin/qa", "run", app, "--module", m, "--exclude-tags", "known-bug", "--no-install"],
+        r = sh(["bin/qa", "run", app, "--module", m, "--exclude-tags", "known-bug", "--no-install", "--device", sim_udid()],
                cwd=wt, check=False, timeout=30 * 60)
         reasons = failure_reasons(wt, app, t0) if r.returncode else ""
         tail.append(f"## module {m} exit={r.returncode}\n{reasons}{(r.stdout + r.stderr)[-3000:]}")
@@ -522,15 +552,15 @@ def fix_is_legit(wt, app):
 
 
 def stage_build(key, app):
-    cfg = app_config(app)
+    try:
+        _stage_build(key, app)
+    finally:
+        drop_simulator()  # never leave the throw-away simulator (or its Maestro driver) behind, whatever happened
+
+
+def _stage_build(key, app):
     wt = ensure_branch(key)
-    # Reuse the build already on the booted simulator; only install when the app (or a booted simulator) is missing.
-    present = sh(["xcrun", "simctl", "get_app_container", "booted", cfg["app_id"]], check=False)
-    if present.returncode == 0:
-        log(f"{key}: {cfg['app_id']} already installed on the booted simulator — skipping install")
-    else:
-        log(f"{key}: installing build {cfg.get('build')}")
-        sh(["bin/qa", "install", app], cwd=wt, timeout=30 * 60)
+    udid = fresh_simulator(app, wt)
 
     writer_summary = "(Stage 3/4 output already on the branch from an earlier run; not regenerated.)"
     if missing_flows(wt, app, key):
@@ -538,7 +568,8 @@ def stage_build(key, app):
         prompt = (f"Stage 4 ONLY for ticket {key}, app {app}. A human has APPROVED the spec and the CASES.md entries "
                   f"for this ticket (label {L_APPROVED} on the ticket), so you are authorised to generate the flows now — this "
                   f"replaces the 'ask before Stage 4' step. Do not redesign or edit any CASES.md expected result. Use the "
-                  f"booted simulator with the build already installed. Keep every hard guardrail (inspect_screen before "
+                  f"simulator with device_id {udid} — use ONLY that device, other simulators on this machine are not yours — "
+                  f"the build is already installed on it. Keep every hard guardrail (inspect_screen before "
                   f"selectors, 15 actions / 5 rounds per case). "
                   f"If a case cannot be automated within the ceiling, skip its flow and say so in your final message. "
                   f"Run `bin/qa-check {app}` before finishing. Do not run the test suite — the runner does that.")
@@ -567,7 +598,8 @@ def stage_build(key, app):
         attempts += 1
         log(f"{key}: red → fix attempt {attempts}/{MAX_FIX_ATTEMPTS}")
         out = claude("fix", key, app, wt,
-                     f"Failing run output:\n{tail}\n\nFix the failing flow(s) per your instructions.",
+                     f"Failing run output:\n{tail}\n\nFix the failing flow(s) per your instructions. Use ONLY the simulator with "
+                     f"device_id {sim_udid()} (the build is installed on it); other simulators are not yours.",
                      agent="flow-fixer",
                      tools=BASE_TOOLS + [f"Edit(apps/{app}/tests/**)", "mcp__maestro__list_devices",
                                          "mcp__maestro__inspect_screen", "mcp__maestro__take_screenshot",
