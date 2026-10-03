@@ -46,3 +46,24 @@ Status: approved by QA (Jira label `qa-approved` on SCRUM-9); automated by the c
 - Not asserted (out of scope per spec): price, size, cart contents, Buy Now.
 
 Note: the spec says "any product"; the first product in the list is used as the representative sample.
+
+---
+
+Source spec: `apps/shopdemo/specs/SCRUM-11/spec.md` (ticket SCRUM-11 — PDP: quantity decreases from 3 to 2 after one tap on "−")
+Status: awaiting QA approval (Stage 3, ticket SCRUM-11)
+
+### PDP.QUANTITY.DECREMENT_FROM_THREE
+**Preconditions:** App launched with cleared state; logged in with the standard test account (see AUTH.LOGIN.SUCCESS_VALID_CREDENTIALS); home screen shown.
+**Steps:**
+1. On the home screen, tap the first product in the list.
+2. On the product detail page, tap "+" once.
+3. Tap "+" once more.
+4. Read the quantity value.
+5. Tap "−" once.
+
+**Expected result:**
+- After step 4: quantity shows 3 (this is the rule's precondition — "raised to 3 by tapping + twice"; if it is not 3, the case is blocked, not passed).
+- After step 5: quantity shows 2.
+- Not asserted (out of scope per spec): price, size, Buy Now, cart contents, minimum-quantity behaviour.
+
+Note: the spec says "any product"; the first product in the list is used as the representative sample.
