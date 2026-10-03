@@ -253,27 +253,110 @@ def case_blocks(wt, app):
     return out
 
 
-def case_text(block):
-    """Preconditions / steps / expected result of one CASES.md block, each collapsed to a single line."""
-    if not block:
-        return "Test case: (missing)"
+# ---- Jira comment (ADF) building blocks ----
+
+def _t(text, *marks):
+    node = {"type": "text", "text": text}
+    if marks:
+        node["marks"] = [{"type": m} for m in marks]
+    return node
+
+
+def _runs(x):
+    return [_t(x)] if isinstance(x, str) else x
+
+
+def _p(x):
+    return {"type": "paragraph", "content": _runs(x)}
+
+
+def _h(level, text):
+    return {"type": "heading", "attrs": {"level": level}, "content": [_t(text)]}
+
+
+def _list(kind, items):
+    return {"type": kind, "content": [{"type": "listItem", "content": [_p(i)]} for i in items]}
+
+
+def _quote(text):
+    return {"type": "blockquote", "content": [_p(text)]}
+
+
+RULE = {"type": "rule"}
+
+
+def cap(text):
+    return text[:1].upper() + text[1:]
+
+
+def _panel(kind, content):
+    return {"type": "panel", "attrs": {"panelType": kind}, "content": content}
+
+
+def parse_case(block):
+    """CASES.md block -> preconditions[], steps[], expected[], notes[] (empty lists when a part is missing)."""
     def part(start, end):
-        m = re.search(rf"\*\*{start}:\*\*\s*(.*?)\s*(?:\*\*{end}:\*\*|\n---|\Z)", block, re.S)
-        return " ".join(m.group(1).split()) if m else "?"
-    return (f"Test case — Preconditions: {part('Preconditions', 'Steps')}\n"
-            f"Steps: {part('Steps', 'Expected result')}\n"
-            f"Expected result: {part('Expected result', 'Nothing-follows')}")
+        m = re.search(rf"\*\*{start}:\*\*\s*(.*?)\s*(?:\*\*{end}:\*\*|\n---|\Z)", block or "", re.S)
+        return m.group(1) if m else ""
+    pre = [x.strip().rstrip(".") for x in re.split(r";\s+", " ".join(part("Preconditions", "Steps").split())) if x.strip()]
+    steps = [m.group(1).strip() for m in re.finditer(r"^\s*\d+\.\s+(.*)$", part("Steps", "Expected result"), re.M)]
+    expected, notes = [], []
+    for line in part("Expected result", "Nothing-follows").splitlines():
+        line = line.strip()
+        if line.startswith("- "):
+            expected.append(line[2:].strip())
+        elif line:
+            (notes if expected else expected).append(re.sub(r"^Note:\s*", "", line))
+    return [cap(x) for x in pre], steps, [cap(x) for x in expected], [cap(x) for x in notes]
 
 
-def review_rules_text(spec_path, cases):
-    """One paragraph per rule: ID, Given/When/Then, ticket quote, confidence + its test case, for the Jira comment."""
-    out = []
-    for block in re.split(r"^### ", spec_path.read_text(), flags=re.M)[1:]:
-        rid = block.splitlines()[0].strip()
-        field = lambda name: (re.search(rf"\*\*{name}:\*\*\s*(.+)", block) or [None, "?"])[1].strip()
-        out.append(f"• {rid}\nRule: {field('Given/When/Then')}\nTicket text: {field('source_span')} (confidence: {field('confidence')})\n"
-                   f"{case_text(cases.get(rid))}")
-    return "\n\n".join(out)
+def parse_rule(block):
+    """spec.md block -> id, given, when, then, source_span, confidence."""
+    rid = block.splitlines()[0].strip()
+    field = lambda name: (re.search(rf"\*\*{name}:\*\*\s*(.+)", block) or [None, "?"])[1].strip()
+    gwt = field("Given/When/Then")
+    m = re.match(r"^Given\s+(.*?),?\s+When\s+(.*?),?\s+Then\s+(.*?)\.?$", gwt, re.S)
+    given, when, then = m.groups() if m else (gwt, "?", "?")
+    return rid, cap(given), cap(when), cap(then), field("source_span").strip('"').replace('\\"', '"'), field("confidence")
+
+
+def review_adf(key, app, spec_path, cases):
+    """The ONE Jira comment QA reviews: index, then per rule the requirement, its ticket source and its test case."""
+    rules = [parse_rule(b) for b in re.split(r"^### ", spec_path.read_text(), flags=re.M)[1:]]
+    n = len(rules)
+    doc = [_h(2, "SPEC AND TEST CASES — READY FOR REVIEW"),
+           _p([_t(f"{key} · {n} rule{'s' if n != 1 else ''} · {n} test case{'s' if n != 1 else ''}. ", "strong"),
+               _t("Please review the rules and the test cases, then approve at the bottom.")])]
+    if n > 1:
+        doc += [_h(3, "INDEX"), _list("orderedList", [[_t(r[0], "code")] for r in rules])]
+    for i, (rid, given, when, then, span, conf) in enumerate(rules, 1):
+        pre, steps, expected, notes = parse_case(cases.get(rid))
+        doc += [RULE, _h(2, f"RULE {i} OF {n}"), _p([_t(rid, "code")]),
+                _h(4, "1. REQUIREMENT"),
+                _list("bulletList", [[_t("Given: ", "strong"), _t(given)], [_t("When: ", "strong"), _t(when)],
+                                     [_t("Then: ", "strong"), _t(then)]]),
+                _h(4, "2. SOURCE IN THE TICKET"), _quote(span),
+                _p([_t("Confidence: ", "strong"), _t(conf)]),
+                _h(4, "3. TEST CASE")]
+        if rid not in cases:
+            doc.append(_p([_t("Missing — no test case was written for this rule.", "strong")]))
+            continue
+        doc += [_p([_t("Preconditions", "strong")]), _list("bulletList", pre or ["(none)"]),
+                _p([_t("Steps", "strong")]), _list("orderedList", steps or ["(none)"]),
+                _p([_t("Expected result", "strong")]), _list("bulletList", expected or ["(none)"])]
+        if notes:
+            doc += [_p([_t("Note", "strong")]), _list("bulletList", notes)]
+    doc += [RULE, _h(2, "HOW TO APPROVE"),
+            _panel("info", [_list("orderedList", [
+                [_t("Everything is right: ", "strong"), _t("add the label "), _t(L_APPROVED, "code"),
+                 _t(" to this ticket. It approves the rules AND the test cases, then automation, the test run and a PR follow.")],
+                [_t("Something is wrong: ", "strong"),
+                 _t(f"there is no automatic revise loop yet. Remove the label "), _t(L_OPT_IN, "code"),
+                 _t(f", correct spec.md / CASES.md on branch qa/{key} (or use /spec and /cases), then add "),
+                 _t(L_OPT_IN, "code"), _t(" and "), _t(L_APPROVED, "code"), _t(" again.")]])]),
+            _p([_t("Files (runner checkout, not pushed yet): ", "strong"),
+                _t(f"apps/{app}/specs/{key}/spec.md and the CASES.md files under apps/{app}/tests/.")])]
+    return {"type": "doc", "version": 1, "content": doc}
 
 
 def stage_spec(key, app):
@@ -319,14 +402,7 @@ def stage_cases(key, app):
     if missing:
         return fail(key, app, f"Stage 3 left no CASES.md entry for: {', '.join(missing)}")
     commit(wt, f"{key}: Stage 3 test cases\n\nTicket: {key}")
-    jira_comment(key, f"✅ Requirement clear — {len(ids)} atomic rule(s) and their test cases are below. Please review BOTH:\n\n"
-                      f"{review_rules_text(spec, cases)}\n\n"
-                      f"Files (runner's repo checkout, branch qa/{key}, not pushed yet): apps/{app}/specs/{key}/spec.md and the "
-                      f"CASES.md files under apps/{app}/tests/.\n\n"
-                      f"QA: if the rules and the test cases are right, add the label `{L_APPROVED}` — it approves the spec AND the "
-                      f"cases, and starts automation, the test run and a PR. If something is wrong there is no automatic revise "
-                      f"loop yet: remove the `{L_OPT_IN}` label, correct spec.md / CASES.md on branch qa/{key} yourself (or with "
-                      f"/spec and /cases), then add `{L_OPT_IN}` and `{L_APPROVED}` again.")
+    jira("POST", f"/rest/api/3/issue/{key}/comment", {"body": review_adf(key, app, spec, cases)})
     jira_labels(key, add=[L_REVIEW])
     set_stage(key, app=app, stage="cases_ready", last_comment=last_comment_id(key))
     log(f"{key}: spec + {len(ids)} case(s) ready → waiting for `{L_APPROVED}`")
