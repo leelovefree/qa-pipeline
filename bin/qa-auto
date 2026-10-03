@@ -218,9 +218,9 @@ def commit(wt, msg):
 def detect_stage(key, app):
     """Where is this ticket, judged from the files on branch qa/<KEY> and its PR (not from a state file)?
     none | needs_info | spec_ready | cases_ready | flows_ready | pr_open"""
-    prs = sh(["gh", "pr", "list", "--head", f"qa/{key}", "--state", "all", "--json", "url"], cwd=ROOT, check=False)
-    if prs.returncode == 0 and json.loads(prs.stdout or "[]"):
-        return "pr_open"
+    prs = sh(["gh", "pr", "list", "--head", f"qa/{key}", "--state", "all", "--json", "url,state"], cwd=ROOT, check=False)
+    if prs.returncode == 0 and any(x["state"] in ("OPEN", "MERGED") for x in json.loads(prs.stdout or "[]")):
+        return "pr_open"  # a PR closed without merging does not count: the ticket can be re-run
     ref = f"qa/{key}"
     if not branch_exists(ref):
         return "none"
@@ -356,8 +356,17 @@ def fail(key, app, why):
 def changed_modules(wt, app):
     out = sh(["git", "diff", "--name-only", "origin/main...HEAD"], cwd=wt).stdout.split()
     # <module>/<feature> directories, so only this ticket's features run (not the whole module's older flows).
-    mods = {"/".join(p.split("/")[3:5]) for p in out if p.startswith(f"apps/{app}/tests/") and p.count("/") >= 5}
+    # Only .yaml flows count: a CASES.md alone (Stage 3 output) is not automation.
+    mods = {"/".join(p.split("/")[3:5]) for p in out
+            if p.startswith(f"apps/{app}/tests/") and p.endswith(".yaml") and p.count("/") >= 5}
     return sorted(mods)
+
+
+def missing_flows(wt, app, key):
+    """Spec rule IDs of this ticket that have no <ID>.yaml flow anywhere under the app's tests."""
+    ids = re.findall(r"^### (\S+)", (wt / "apps" / app / "specs" / key / "spec.md").read_text(), re.M)
+    have = {f.stem for f in (wt / "apps" / app / "tests").glob("**/*.yaml")}
+    return [i for i in ids if i not in have]
 
 
 def run_tests(wt, app, mods):
@@ -404,7 +413,7 @@ def stage_build(key, app):
         sh(["bin/qa", "install", app], cwd=wt, timeout=30 * 60)
 
     writer_summary = "(Stage 3/4 output already on the branch from an earlier run; not regenerated.)"
-    if not changed_modules(wt, app):
+    if missing_flows(wt, app, key):
         mark_cases_approved(wt, app, key)
         prompt = (f"Stage 4 ONLY for ticket {key}, app {app}. A human has APPROVED the spec and the CASES.md entries "
                   f"for this ticket (label {L_APPROVED} on the ticket), so you are authorised to generate the flows now — this "
@@ -423,8 +432,9 @@ def stage_build(key, app):
             return fail(key, app, f"bin/qa-check failed after generation:\n{check.stdout[-800:]}")
         commit(wt, f"{key}: Stage 4 Maestro flows\n\nTicket: {key}")
     mods = changed_modules(wt, app)
+    missing = missing_flows(wt, app, key)
     if not mods:
-        return fail(key, app, "automation-writer produced no flows")
+        return fail(key, app, f"Stage 4 produced no flow for any rule (missing: {', '.join(missing) or 'n/a'})")
 
     passed, tail = run_tests(wt, app, mods)
     attempts = 0
@@ -458,19 +468,19 @@ def stage_build(key, app):
         passed, tail = run_tests(wt, app, mods)
         fix_note += f"- attempt {attempts}: {'green' if passed else 'still red'}. Fixer said: {reply}\n"
 
-    open_pr(key, app, wt, mods, passed, attempts, fix_note, writer_summary, tail, possible_app_bug)
+    open_pr(key, app, wt, mods, passed, attempts, fix_note, writer_summary, tail, possible_app_bug, missing)
 
 
-def open_pr(key, app, wt, mods, passed, attempts, fix_note, writer_summary, tail, possible_app_bug=False):
+def open_pr(key, app, wt, mods, passed, attempts, fix_note, writer_summary, tail, possible_app_bug=False, missing=()):
     cost, recs = total_cost(key)
     models = ", ".join(sorted({f"{r['agent']}({r['model_requested']})" for r in recs}))
-    status = "GREEN" if passed else "RED"
+    status = "RED" if not passed else "INCOMPLETE" if missing else "GREEN"  # GREEN needs a flow for every spec rule
     body = f"""## {key} — automated tests ({status})
 
 - Ticket: {os.environ['JIRA_BASE_URL'].rstrip('/')}/browse/{key}
 - Modules run locally via `bin/qa` (verdict = Maestro exit code): {', '.join(mods)}
 - Auto-fix attempts: {attempts}/{MAX_FIX_ATTEMPTS}
-{fix_note}
+{fix_note}{('- **NO FLOW for: ' + ', '.join(missing) + '** — not automated, nothing verifies these rules' + chr(10)) if missing else ''}
 ### Reviewer checklist
 - [ ] Each flow's assertions match its CASES.md expected result and the spec rule
 - [ ] No assertion was weakened by a fix (an integrity gate rejects this in code, but verify)
@@ -488,15 +498,15 @@ Agents: {models} · Sessions: {', '.join(str(r['session_id']) for r in recs)} ·
     sh(["git", "push", "-u", "origin", f"qa/{key}", "--force-with-lease"], cwd=wt)
     cmd = ["gh", "pr", "create", "--base", "main", "--head", f"qa/{key}",
            "--title", f"{key}: automated tests ({status.lower()})", "--body", body]
-    if not passed:
+    if status != "GREEN":
         cmd.append("--draft")
     url = sh(cmd, cwd=wt).stdout.strip().splitlines()[-1]
     hint = ("\n\n⚠️ The fixer flagged a POSSIBLE APP BUG (expected result differs from app behaviour) — "
             "triage A/B/C/D before touching any test.") if possible_app_bug else ""
-    jira_comment(key, f"🔀 PR opened ({status}): {url}\n\nLocal run: {'all flows passed' if passed else 'FAILED after ' + str(attempts) + ' auto-fix attempt(s) — needs human triage; the PR is a draft'}. "
+    jira_comment(key, f"🔀 PR opened ({status}): {url}\n\nLocal run: {('all flows passed' if not missing else 'flows that exist passed, but NO FLOW for: ' + ', '.join(missing) + ' — the PR is a draft') if passed else 'FAILED after ' + str(attempts) + ' auto-fix attempt(s) — needs human triage; the PR is a draft'}. "
                       f"Nothing merges without a human approval.{hint}")
-    jira_labels(key, add=[L_PR_OPEN if passed else L_RED], remove=[L_REVIEW, L_APPROVED, L_ERROR])
-    set_stage(key, app=app, stage="pr_open" if passed else "pr_red", pr=url, cost_usd=round(cost, 2))
+    jira_labels(key, add=[L_PR_OPEN if status == "GREEN" else L_RED], remove=[L_REVIEW, L_APPROVED, L_ERROR])
+    set_stage(key, app=app, stage="pr_open" if status == "GREEN" else "pr_red", pr=url, cost_usd=round(cost, 2))
     log(f"{key}: PR {url} ({status}), total cost ${cost:.2f}")
 
 
