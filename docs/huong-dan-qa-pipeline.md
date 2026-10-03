@@ -246,6 +246,8 @@ bin/qa install <app>        # tải + cài build lên simulator
 Quy tắc: **mỗi stage chạy trong một session Claude Code riêng**. Mở Claude Code ở thư mục gốc repo QA.
 
 ### Hai cách làm một ticket (chọn cho từng ticket, đổi giữa chừng được)
+Chi tiết cách dùng tool và các lệnh: [huong-dan-qa-auto.md](huong-dan-qa-auto.md).
+
 | | Tự động (2a) | Thủ công (2b) |
 |---|---|---|
 | Kích hoạt | Gắn label `qa-auto` trên Jira, `bin/qa-auto poll` (hoặc `bin/qa-auto run <KEY>`) chạy ở máy bạn | Bạn gọi từng lệnh: `/spec`, `/cases`, `/flows`, `/run`, `/fix`, `/pr` (hoặc gọi agent như các mục dưới) |
