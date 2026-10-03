@@ -30,7 +30,7 @@ Note: "no upper limit" cannot be proven exhaustively; 21 is a sample well above 
 ---
 
 Source spec: `apps/shopdemo/specs/SCRUM-9/spec.md` (ticket SCRUM-9 — PDP: quantity increases to 3 after two taps on "+")
-Status: awaiting QA approval (Stage 3, ticket SCRUM-9)
+Status: approved by QA (Jira label `qa-approved` on SCRUM-9); automated by the co-located `<REQUIREMENT_ID>.yaml` flows (Stage 4).
 
 ### PDP.QUANTITY.INCREMENT_TWO_TAPS
 **Preconditions:** App launched with cleared state; logged in with the standard test account (see AUTH.LOGIN.SUCCESS_VALID_CREDENTIALS); home screen shown.
