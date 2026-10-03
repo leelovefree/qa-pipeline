@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Install: replace __REPO__ and __HOME__, copy to ~/Library/LaunchAgents/, then
+       launchctl load ~/Library/LaunchAgents/com.qa-pipeline.auto.plist
+     Stop: launchctl unload ... -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.qa-pipeline.auto</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO__/bin/qa-auto</string>
+    <string>poll</string>
+    <string>--interval</string>
+    <string>300</string>
+  </array>
+  <key>WorkingDirectory</key><string>__REPO__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__HOME__/.local/bin:__HOME__/.maestro/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/qa-auto.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/qa-auto.log</string>
+</dict>
+</plist>
