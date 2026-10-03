@@ -50,7 +50,7 @@ Note: the spec says "any product"; the first product in the list is used as the 
 ---
 
 Source spec: `apps/shopdemo/specs/SCRUM-11/spec.md` (ticket SCRUM-11 — PDP: quantity decreases from 3 to 2 after one tap on "−")
-Status: awaiting QA approval (Stage 3, ticket SCRUM-11)
+Status: approved by QA (Jira label `qa-approved` on SCRUM-11); automated by the co-located `<REQUIREMENT_ID>.yaml` flows (Stage 4).
 
 ### PDP.QUANTITY.DECREMENT_FROM_THREE
 **Preconditions:** App launched with cleared state; logged in with the standard test account (see AUTH.LOGIN.SUCCESS_VALID_CREDENTIALS); home screen shown.
