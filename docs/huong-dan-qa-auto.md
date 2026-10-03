@@ -41,7 +41,7 @@ Cả hai làm trên **cùng branch `qa/<TICKET-ID>`, cùng file `apps/<app>/...`
    ```
    File này nằm **ngoài repo**, không bao giờ commit.
 3. Mỗi ticket cần acceptance criteria rõ (Given/When/Then, có giá trị mong đợi cụ thể). Ticket mơ hồ sẽ bị AI dừng lại và hỏi.
-4. Có simulator đã boot (`iPhone 17`, hoặc để `bin/qa` tự boot). Nếu app đã cài sẵn trên simulator thì tool không cài lại build.
+4. Không cần tự boot simulator: tool **tự tạo một simulator riêng tên `qa-auto`** (cùng loại máy với `ios_device` trong `app.config.yml`), cài build, dùng xong thì **xoá**. Simulator của bạn không bị đụng tới.
 
 ---
 
@@ -81,7 +81,8 @@ Lỗi hoặc timeout bất kỳ → comment lên ticket và gắn `qa-error`. **
   (Bản cũ dùng worktree ẩn trong `.qa-work/` nên có hai thư mục `apps/shopdemo`; bản này không còn.)
 - **Chỉ chạy khi bạn đang ở `main` hoặc `qa/<TICKET-ID>` và không có file đã sửa chưa commit.** Nếu không, nó dừng và nói rõ lý do, không đụng gì.
 - Chỉ commit file trong `apps/`; hoàn tác một lần fix sai cũng chỉ trong `apps/`, không xóa file khác của bạn.
-- Trong lúc chạy nó chiếm thư mục repo và simulator: **đừng chạy test tay hay dùng simulator cùng lúc.**
+- Trong lúc chạy nó chiếm thư mục repo: đừng sửa file hay đổi branch. Simulator thì dùng riêng (`qa-auto`), nên bạn dùng simulator của mình vẫn được.
+- **Simulator sạch mỗi lần**: tạo mới + cài app trước phiên AI (Stage 4) và trước mỗi lần chạy test, xoá khi xong. Tốn thêm khoảng 1–2 phút mỗi lần, đổi lại không còn lỗi `DeviceUnreachable` do driver cũ còn sót. Nếu vẫn gặp lỗi thiết bị, tool tạo simulator mới và chạy lại đúng 1 lần.
 - `.qa-work/` là thư mục tạm bị gitignore (build tải về, `report.xml` của `bin/qa`, và `.qa-work/auto/` gồm `state.json`, `lock`,
   `<KEY>/runs.jsonl` ghi chi phí/session từng stage). Không bao giờ vào PR.
 
@@ -90,7 +91,7 @@ Lỗi hoặc timeout bất kỳ → comment lên ticket và gắn `qa-error`. **
 - `flow-fixer` chỉ sửa file `.yaml` có sẵn trong `apps/<app>/tests/`. Đụng vào dòng `assert*`, sửa file khác hoặc tạo file mới → **tự hoàn tác** lần fix đó.
 - Không sửa spec/CASES.md để test xanh. Nghi app bug → fixer báo `POSSIBLE_APP_BUG`, không sửa gì, người triage A/B/C/D (§9.1 của hướng dẫn chung).
 - Mỗi stage một session `claude -p` riêng, có danh sách tool cho phép, trần chi phí (spec $1.5 · cases $2 · build $12 · fix $4) và timeout (15 / 15 / 60 / 20 phút).
-- Khoá một pipeline tại một thời điểm (một simulator).
+- Khoá một pipeline tại một thời điểm.
 - AI **không bao giờ merge**. Chi phí, session và agent được ghi vào PR để truy vết.
 
 Thực tế SCRUM-8 (2 rule đơn giản): spec 30 giây ($0.27) · sinh case + 2 flow 72 giây ($0.34) · chạy thử 4 flow ~1,5 phút · tổng ~$0.9.
