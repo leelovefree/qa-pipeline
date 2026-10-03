@@ -17,7 +17,7 @@ Chọn cho **từng ticket**, đổi giữa chừng được.
 | Kích hoạt | Gắn label `qa-auto` trên Jira, `bin/qa-auto` chạy ở máy bạn | Bạn gõ từng lệnh `/spec`, `/cases`, `/flows`, `/run`, `/fix`, `/pr` trong Claude Code |
 | Ai làm | AI làm cả chuỗi, dừng ở các cổng cần người | Bạn điều khiển từng stage, AI làm từng bước |
 | Jira | Tool tự comment và đổi label | Bạn tự comment (dùng `no-jira-write`) |
-| Bạn làm gì | Trả lời câu hỏi trên ticket, đọc rule rồi gắn `qa-approved`, review PR | Đọc kết quả sau mỗi stage rồi gọi lệnh tiếp |
+| Bạn làm gì | Trả lời câu hỏi trên ticket, đọc rule + test case trong **một comment** rồi gắn `qa-approved`, review PR | Đọc kết quả sau mỗi stage rồi gọi lệnh tiếp |
 
 Cả hai làm trên **cùng branch `qa/<TICKET-ID>`, cùng file `apps/<app>/...`**. Đó là lý do chuyển qua lại được (mục 5).
 
@@ -65,9 +65,9 @@ JQL mặc định: `project = <tracker_project_key> AND labels = qa-auto`. Muố
 | 1 | Bạn gắn `qa-auto` | `qa-auto` |
 | 2 | **Stage 2**: AI đọc ticket. Nếu mơ hồ → comment câu hỏi, dừng | `qa-needs-info` |
 | 2' | Bạn trả lời trên ticket → tool tự chạy lại Stage 2 (resume) | |
-| 3 | Rõ ràng → comment **liệt kê từng rule** (ID, Given/When/Then, câu trích gốc, độ tin cậy) | `qa-spec-ready` |
-| 4 | **Bạn đọc rule rồi gắn `qa-approved`.** Rule sai thì comment sửa, không gắn label | `qa-approved` |
-| 5 | **Stage 3+4**: AI viết `CASES.md` và flow Maestro (inspect màn hình thật), `bin/qa-check` | |
+| 3 | Rõ ràng → **Stage 3**: AI viết `CASES.md` (chỉ text, không dùng simulator), rồi đăng **một comment** gồm từng rule (ID, Given/When/Then, câu trích gốc, độ tin cậy) **kèm test case của rule đó** (precondition, bước, kết quả mong đợi) | `qa-ready-for-review` |
+| 4 | **Bạn đọc cả rule lẫn case rồi gắn `qa-approved`** — một lần duyệt cho cả spec và cases. Sai thì chưa có vòng sửa tự động: gỡ `qa-auto`, tự sửa `spec.md`/`CASES.md` trên branch `qa/<KEY>` (hoặc `/spec`, `/cases`), rồi gắn lại `qa-auto` + `qa-approved` | `qa-approved` |
+| 5 | **Stage 4**: dòng `Status: awaiting QA approval` trong `CASES.md` được đổi thành `approved by QA`; AI sinh flow Maestro (inspect màn hình thật), `bin/qa-check` | |
 | 6 | Chạy thử các feature của ticket bằng `bin/qa` (loại flow `known-bug` như CI) | |
 | 7 | Test đỏ → `flow-fixer` sửa selector/timing, tối đa 3 lần | |
 | 8 | Push branch, mở PR (xanh: PR thường, đỏ: **draft**), comment link PR lên Jira | `qa-pr-open` / `qa-red` |
@@ -89,7 +89,7 @@ Lỗi hoặc timeout bất kỳ → comment lên ticket và gắn `qa-error`. **
 - **Pass/fail chỉ do exit code của `bin/qa` (Maestro).** AI không được tuyên bố pass.
 - `flow-fixer` chỉ sửa file `.yaml` có sẵn trong `apps/<app>/tests/`. Đụng vào dòng `assert*`, sửa file khác hoặc tạo file mới → **tự hoàn tác** lần fix đó.
 - Không sửa spec/CASES.md để test xanh. Nghi app bug → fixer báo `POSSIBLE_APP_BUG`, không sửa gì, người triage A/B/C/D (§9.1 của hướng dẫn chung).
-- Mỗi stage một session `claude -p` riêng, có danh sách tool cho phép, trần chi phí (spec $1.5 · build $12 · fix $4) và timeout (15 / 60 / 20 phút).
+- Mỗi stage một session `claude -p` riêng, có danh sách tool cho phép, trần chi phí (spec $1.5 · cases $2 · build $12 · fix $4) và timeout (15 / 15 / 60 / 20 phút).
 - Khoá một pipeline tại một thời điểm (một simulator).
 - AI **không bao giờ merge**. Chi phí, session và agent được ghi vào PR để truy vết.
 
@@ -132,13 +132,14 @@ Tool xác định stage như sau:
 |---|---|---|
 | Chưa có branch hoặc chưa có `spec.md` | `none` | Chạy Stage 2 |
 | Có `open-questions.md` | `needs_info` | Chạy lại Stage 2 khi có trả lời mới |
-| Có `spec.md`, thiếu flow cho rule nào đó | `spec_ready` | Chờ `qa-approved`, rồi sinh case/flow |
+| Có `spec.md`, thiếu `CASES.md` cho rule nào đó | `spec_ready` | Chạy Stage 3 (không cần label), đăng comment duyệt |
+| Có `spec.md` + `CASES.md` đủ mọi rule, thiếu flow | `cases_ready` | Chờ `qa-approved`, rồi sinh flow (Stage 4), chạy thử, mở PR |
 | Có đủ flow cho mọi rule | `flows_ready` | Chờ `qa-approved`, rồi chạy thử và mở PR |
 | Đã có PR | `pr_open` | Xong phần của tool; người review |
 
 Lưu ý: sang bước sinh flow / chạy thử / PR **luôn cần label `qa-approved`** (cổng người), kể cả khi flow bạn tự viết.
 
-Ví dụ: bạn tự làm tay `/spec` và `/cases`, rồi muốn AI lo phần còn lại → gắn `qa-auto` và `qa-approved`. Tool thấy đã có `spec.md` + `CASES.md` nhưng chưa có flow, nên chỉ làm Stage 4 trở đi.
+Ví dụ: bạn tự làm tay `/spec` và `/cases`, rồi muốn AI lo phần còn lại → gắn `qa-auto` và `qa-approved`. Tool thấy đã có `spec.md` + `CASES.md` nhưng chưa có flow, nên chỉ làm Stage 4 trở đi (cases coi như bạn đã duyệt).
 
 ---
 
