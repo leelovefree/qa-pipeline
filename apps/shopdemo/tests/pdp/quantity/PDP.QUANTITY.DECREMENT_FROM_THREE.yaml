@@ -1,0 +1,44 @@
+# Requirement: PDP.QUANTITY.DECREMENT_FROM_THREE
+# Ticket: SCRUM-11 | Spec: apps/shopdemo/specs/SCRUM-11/spec.md | Case: apps/shopdemo/tests/pdp/quantity/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-10-03.
+# The quantity label renders zero-padded (observed "01" at default), so values are matched as
+# "^0*<n>$" (anchored) — the numeric value is asserted exactly, only the padding is tolerated.
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1: first product in the list
+- tapOn: "Defile Lux Blazer"
+- assertVisible:
+    id: product_detail_screen
+# Steps 2–3: tap "+" twice
+- tapOn:
+    id: product_detail_quantity_increment_button
+- tapOn:
+    id: product_detail_quantity_increment_button
+# Step 4: precondition — quantity is 3 (fails the flow if not, so the case never passes on a wrong start)
+- assertVisible:
+    id: product_detail_quantity_value_label
+    text: "^0*3$"
+# Step 5: tap "−" once
+- tapOn:
+    id: product_detail_quantity_decrement_button
+# Expected: quantity shows 2
+- assertVisible:
+    id: product_detail_quantity_value_label
+    text: "^0*2$"
