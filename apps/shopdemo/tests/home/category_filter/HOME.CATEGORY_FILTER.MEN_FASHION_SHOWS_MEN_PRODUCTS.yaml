@@ -1,0 +1,35 @@
+# Requirement: HOME.CATEGORY_FILTER.MEN_FASHION_SHOWS_MEN_PRODUCTS
+# Ticket: SCRUM-12 | Spec: apps/shopdemo/specs/SCRUM-12/spec.md | Case: apps/shopdemo/tests/home/category_filter/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on qa-auto simulator (iOS 26.5), 2026-10-06.
+# Each product card's accessibility text is "<name>, <category>, $<price>"; "$" is regex-escaped.
+# "Exactly two": after filtering the list is a single page, so no product card other than the two
+# expected ids may be visible (negative lookahead on the observed home_product_item_<slug> ids).
+appId: com.qademo.iosshopdemo
+tags:
+  - smoke
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+- assertVisible:
+    id: home_category_chip_all
+- tapOn:
+    id: home_category_chip_men_fashion
+- assertVisible: "Classic Denim Jacket, Men Fashion, \\$180"
+- assertVisible: "Leather Sneakers, Men Fashion, \\$220"
+- assertNotVisible:
+    id: "home_product_item_(?!classic-denim-jacket|leather-sneakers).*"
