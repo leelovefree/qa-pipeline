@@ -68,8 +68,9 @@ JQL mặc định: `project = <tracker_project_key> AND labels = qa-auto`. Muố
 | 3 | Rõ ràng → **Stage 3**: AI viết `CASES.md` (chỉ text, không dùng simulator), rồi đăng **một comment** gồm từng rule (ID, Given/When/Then, câu trích gốc, độ tin cậy) **kèm test case của rule đó** (precondition, bước, kết quả mong đợi) | `qa-ready-for-review` |
 | 4 | **Bạn đọc cả rule lẫn case rồi gắn `qa-approved`** — một lần duyệt cho cả spec và cases. Sai thì chưa có vòng sửa tự động: gỡ `qa-auto`, tự sửa `spec.md`/`CASES.md` trên branch `qa/<KEY>` (hoặc `/spec`, `/cases`), rồi gắn lại `qa-auto` + `qa-approved` | `qa-approved` |
 | 5 | **Stage 4**: dòng `Status: awaiting QA approval` trong `CASES.md` được đổi thành `approved by QA`; AI sinh flow Maestro (inspect màn hình thật), `bin/qa-check` | |
+| 5' | **Chốt chặn `known-bug`** (trong code): nếu AI thêm tag `known-bug` vào flow nào (flow mới hoặc flow cũ chưa có tag trên `main`) thì toàn bộ flow vừa sinh bị xoá và ticket dừng ở `qa-error`. Lý do: flow có tag bị bỏ qua khi chạy, nên AI có thể dùng tag để biến test đỏ thành PR xanh. Chỉ người gắn tag, sau khi đã tạo bug ticket thật | `qa-error` |
 | 6 | Chạy thử các feature của ticket bằng `bin/qa` (loại flow `known-bug` như CI) | |
-| 7 | Test đỏ → `flow-fixer` sửa selector/timing, tối đa 3 lần | |
+| 7 | Test đỏ → `flow-fixer` sửa selector/timing, tối đa 3 lần (bản fix bị từ chối nếu đổi assertion hoặc thêm tag `known-bug`) | |
 | 8 | Push branch, mở PR (xanh: PR thường, đỏ: **draft**), comment link PR lên Jira | `qa-pr-open` / `qa-red` |
 | 9 | **Bạn review PR và merge.** Không có gì tự merge | |
 
@@ -164,7 +165,8 @@ Ví dụ: bạn tự làm tay `/spec` và `/cases`, rồi muốn AI lo phần c�
 - **Xanh chưa có nghĩa là test đúng.** Bạn là người kiểm cuối: assertion có khớp expected result của spec không? Tool chưa có cổng chất lượng assertion bằng code.
 - Có thể **trùng test cũ** (SCRUM-8 sinh `INCREASE_ONE_TO_TWO` dù `INCREASE` đã phủ). Tool chưa so với test có sẵn; `/cases` có nhắc AI báo trùng nhưng chưa được kiểm chứng.
 - Flow hiện **hard-code tài khoản demo** (không nên với dữ liệu thật; theo CLAUDE.md tài khoản test phải nằm ở CI secrets).
-- Chưa kiểm chứng thật: nhánh ticket mơ hồ (hỏi lại → trả lời → resume), `flow-fixer` sửa selector thật, PR draft đỏ.
+- Chưa kiểm chứng thật: nhánh ticket mơ hồ (hỏi lại → trả lời → resume), `flow-fixer` sửa selector thật, PR draft đỏ, chốt chặn `known-bug` (mới chỉ test từng hàm, AI chưa từng thử gắn tag).
+- Muốn đánh dấu một test đỏ là bug thật của app: bạn tạo bug ticket rồi tự thêm `tags: [known-bug]` và dòng `# Known-bug: KEY-123` vào flow (qua PR). AI không được làm việc này.
 - Chi phí: `claude -p` dùng hạn mức Claude của chính tài khoản bạn.
 - Chỉ iOS (simulator cần macOS). Android chưa có runner trong `bin/qa`.
 
