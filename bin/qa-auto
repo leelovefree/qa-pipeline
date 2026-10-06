@@ -149,6 +149,28 @@ COMMENT_JIRA = ["mcp__atlassian-personal__addCommentToJiraIssue"]
 BASE_TOOLS = ["Read", "Glob", "Grep"]
 
 
+def model_usage(out):
+    """Real per-model tokens + cost from `claude -p --output-format json` (`modelUsage`), keyed by model id."""
+    return {m: {"input": u.get("inputTokens", 0), "output": u.get("outputTokens", 0),
+                "cache_read": u.get("cacheReadInputTokens", 0), "cache_write": u.get("cacheCreationInputTokens", 0),
+                "cost_usd": round(u.get("costUSD", 0), 4)}
+            for m, u in (out.get("modelUsage") or {}).items()}
+
+
+def models_line(recs):
+    """Models that actually ran (with summed cost), e.g. 'claude-sonnet-5-5 $1.20, claude-haiku-4-5-20251001 $0.01'.
+    Records written before `models` existed fall back to the requested model."""
+    cost, legacy = {}, set()
+    for r in recs:
+        if r.get("models"):
+            for m, u in r["models"].items():
+                cost[m] = cost.get(m, 0) + u["cost_usd"]
+        else:
+            legacy.add(f"{r['agent']}({r['model_requested']})")
+    parts = [f"{m} ${c:.2f}" for m, c in sorted(cost.items(), key=lambda x: -x[1])]
+    return ", ".join(parts + sorted(legacy)) or "unknown"
+
+
 def claude(stage, key, app, cwd, prompt, agent=None, model=None, tools=()):
     cmd = ["claude", "-p", prompt, "--output-format", "json", "--permission-mode", "dontAsk",
            "--max-budget-usd", str(STAGE_BUDGET_USD[stage]), "--allowedTools", *tools]
@@ -163,6 +185,7 @@ def claude(stage, key, app, cwd, prompt, agent=None, model=None, tools=()):
     except json.JSONDecodeError:
         out = {"result": r.stdout[-1500:], "is_error": True}
     rec = {"ticket": key, "stage": stage, "agent": agent, "model_requested": model or "agent-default",
+           "models": model_usage(out),
            "session_id": out.get("session_id"), "cost_usd": out.get("total_cost_usd"),
            "seconds": round(time.time() - t0), "is_error": bool(out.get("is_error")) or r.returncode != 0}
     d = AUTO / key
@@ -664,7 +687,7 @@ def _stage_build(key, app):
 
 def open_pr(key, app, wt, mods, passed, attempts, fix_note, writer_summary, tail, possible_app_bug=False, missing=()):
     cost, recs = total_cost(key)
-    models = ", ".join(sorted({f"{r['agent']}({r['model_requested']})" for r in recs}))
+    models = models_line(recs)
     status = "RED" if not passed else "INCOMPLETE" if missing else "GREEN"  # GREEN needs a flow for every spec rule
     body = f"""## {key} — automated tests ({status})
 
@@ -681,7 +704,7 @@ def open_pr(key, app, wt, mods, passed, attempts, fix_note, writer_summary, tail
 {writer_summary}
 
 ### Traceability
-Agents: {models} · Sessions: {', '.join(str(r['session_id']) for r in recs)} · Total cost: ${cost:.2f}
+Models: {models} · Sessions: {', '.join(str(r['session_id']) for r in recs)} · Total cost: ${cost:.2f}
 {'' if passed else chr(10) + '<details><summary>Last failing output</summary>' + chr(10) + chr(10) + '```' + chr(10) + tail[-2500:] + chr(10) + '```' + chr(10) + '</details>'}
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

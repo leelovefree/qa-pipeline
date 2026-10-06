@@ -85,7 +85,7 @@ Lỗi hoặc timeout bất kỳ → comment lên ticket và gắn `qa-error`. **
 - Trong lúc chạy nó chiếm thư mục repo: đừng sửa file hay đổi branch. Simulator thì dùng riêng (`qa-auto`), nên bạn dùng simulator của mình vẫn được.
 - **Simulator sạch mỗi lần**: tạo mới + cài app trước phiên AI (Stage 4) và trước mỗi lần chạy test, xoá khi xong. Tốn thêm khoảng 1–2 phút mỗi lần, đổi lại không còn lỗi `DeviceUnreachable` do driver cũ còn sót. Nếu vẫn gặp lỗi thiết bị, tool tạo simulator mới và chạy lại đúng 1 lần.
 - `.qa-work/` là thư mục tạm bị gitignore (build tải về, `report.xml` của `bin/qa`, và `.qa-work/auto/` gồm `state.json`, `lock`,
-  `<KEY>/runs.jsonl` ghi chi phí/session từng stage). Không bao giờ vào PR.
+  `<KEY>/runs.jsonl` ghi chi phí, session và **model thật + token (input/output/cache) theo từng model** của mỗi stage — lấy từ `modelUsage` mà `claude -p` trả về, không phải model mình yêu cầu). Dòng "Models" trong PR body lấy từ đây. Không bao giờ vào PR.
 
 ### Rào chắn bằng code (không phải lời dặn AI)
 - **Pass/fail chỉ do exit code của `bin/qa` (Maestro).** AI không được tuyên bố pass.
