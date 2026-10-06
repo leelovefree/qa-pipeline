@@ -32,7 +32,7 @@ Not covered (out of spec scope): product order, other category chips, product de
 ---
 
 Source spec: `apps/shopdemo/specs/SCRUM-13/spec.md` (ticket SCRUM-13 — Home: "Women Fashion" category chip filters the product list)
-Status: awaiting QA approval (Stage 3, ticket SCRUM-13)
+Status: approved by QA (Jira label `qa-approved` on SCRUM-13); automated by the co-located `<REQUIREMENT_ID>.yaml` flows (Stage 4).
 
 Not covered (out of spec scope): product order, product details beyond name/price, the "Men Fashion" and "Kids Fashion" chips, returning to "All".
 

@@ -1,0 +1,36 @@
+# Requirement: HOME.CATEGORY_FILTER.WOMEN_FASHION_EXCLUDES_OTHER_CATEGORIES
+# Ticket: SCRUM-13 | Spec: apps/shopdemo/specs/SCRUM-13/spec.md | Case: apps/shopdemo/tests/home/category_filter/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on qa-auto simulator (iOS 26.5), 2026-10-07.
+# Product names are matched on the observed name-label accessibility text.
+# Under "All" the list is two pages: "Classic Denim Jacket" and "Training Shoes" sit in the bottom row,
+# visible on the first screen (observed), so no scroll is needed for the step 1 sanity check.
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1 — sanity: the products exist under "All" before filtering.
+- assertVisible: "Classic Denim Jacket"
+- assertVisible: "Knit Bow Back Top"
+- assertVisible: "Training Shoes"
+# Step 2
+- tapOn:
+    id: home_category_chip_women_fashion
+- assertNotVisible: "Classic Denim Jacket"
+- assertNotVisible: "Knit Bow Back Top"
+- assertNotVisible: "Training Shoes"
+- assertNotVisible: ".*, (Men Fashion|Kids Fashion|Boys World), \\$.*"

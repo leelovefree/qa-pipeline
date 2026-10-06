@@ -1,0 +1,35 @@
+# Requirement: HOME.CATEGORY_FILTER.WOMEN_FASHION_SHOWS_WOMEN_PRODUCTS
+# Ticket: SCRUM-13 | Spec: apps/shopdemo/specs/SCRUM-13/spec.md | Case: apps/shopdemo/tests/home/category_filter/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on qa-auto simulator (iOS 26.5), 2026-10-07.
+# Each product card's accessibility text is "<name>, <category>, $<price>"; "$" is regex-escaped.
+# "Exactly three": after filtering the list is a single page (observed "1 page" scroll bar), so no
+# product card other than the three expected ids may be visible (negative lookahead on the observed
+# home_product_item_<slug> ids).
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+- assertVisible:
+    id: home_category_chip_all
+- tapOn:
+    id: home_category_chip_women_fashion
+- assertVisible: "Defile Lux Blazer, Women Fashion, \\$300"
+- assertVisible: "Neck Short Sleeves, Women Fashion, \\$120"
+- assertVisible: "Magnolia Pink Dress, Women Fashion, \\$150"
+- assertNotVisible:
+    id: "home_product_item_(?!defile-lux-blazer|neck-short-sleeves|magnolia-pink-dress).*"
