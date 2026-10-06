@@ -1,7 +1,7 @@
 # CASES — home / category_filter
 
 Source spec: `apps/shopdemo/specs/SCRUM-12/spec.md` (ticket SCRUM-12 — Home: "Men Fashion" category chip filters the product list)
-Status: awaiting QA approval (Stage 3, ticket SCRUM-12)
+Status: approved by QA (Jira label `qa-approved` on SCRUM-12); automated by the co-located `<REQUIREMENT_ID>.yaml` flows (Stage 4).
 
 Not covered (out of spec scope): product order, other category chips, product details beyond name/price.
 

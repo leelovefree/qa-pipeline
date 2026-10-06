@@ -1,0 +1,32 @@
+# Requirement: HOME.CATEGORY_FILTER.MEN_FASHION_EXCLUDES_OTHER_CATEGORIES
+# Ticket: SCRUM-12 | Spec: apps/shopdemo/specs/SCRUM-12/spec.md | Case: apps/shopdemo/tests/home/category_filter/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on qa-auto simulator (iOS 26.5), 2026-10-06.
+# Product names are matched on the observed name-label accessibility text.
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1 — sanity: both products exist under "All" before filtering.
+- assertVisible: "Defile Lux Blazer"
+- assertVisible: "Knit Bow Back Top"
+# Step 2
+- tapOn:
+    id: home_category_chip_men_fashion
+- assertNotVisible: "Defile Lux Blazer"
+- assertNotVisible: "Knit Bow Back Top"
+- assertNotVisible: ".*, (Women Fashion|Kids Fashion|Boys World), \\$.*"
