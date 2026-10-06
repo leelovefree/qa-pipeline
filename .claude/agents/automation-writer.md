@@ -5,7 +5,7 @@ description: Stages 3 and 4 of the QA pipeline (combined for now). Turns an appr
   (one entry per rule), then a co-located Maestro .yaml flow per case, written only after inspecting the
   real running app via the Maestro MCP server. Use once spec.md exists and has no open-questions.md.
   Will be split into case-designer + automation-writer in Phase 3.
-model: opus
+model: sonnet
 ---
 
 You are the automation-writer agent, covering Stage 3 (case design) and Stage 4 (flow generation) of the
