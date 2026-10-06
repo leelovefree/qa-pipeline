@@ -38,6 +38,7 @@ MAX_FIX_ATTEMPTS = 3
 STAGE_TIMEOUT = {"spec": 15 * 60, "cases": 15 * 60, "build": 60 * 60, "fix": 20 * 60}
 STAGE_BUDGET_USD = {"spec": 1.5, "cases": 2.0, "build": 12.0, "fix": 4.0}
 ASSERT = re.compile(r"^\s*-?\s*assert\w*", re.I)
+KNOWN_BUG_TAG = re.compile(r"^\s*-\s*known-bug\s*$|^tags:\s*\[.*\bknown-bug\b.*\]", re.M)  # same as bin/qa-check TAG
 
 L_OPT_IN, L_NEEDS_INFO, L_REVIEW = "qa-auto", "qa-needs-info", "qa-ready-for-review"
 L_APPROVED, L_PR_OPEN, L_RED, L_ERROR = "qa-approved", "qa-pr-open", "qa-red", "qa-error"
@@ -536,6 +537,26 @@ def assert_lines(text):
     return Counter(l.strip() for l in text.splitlines() if ASSERT.match(l))
 
 
+def new_known_bug_tags(wt, app):
+    """Flows that carry the `known-bug` tag now but did not on origin/main.
+
+    qa-auto runs with --exclude-tags known-bug, so a tagged flow can never turn a PR red. If an agent could add the
+    tag (with any made-up ticket key) it could turn a failing flow into a green PR. Only a human, after filing a real
+    bug ticket, may tag a flow."""
+    changed = set(sh(["git", "diff", "--name-only", "origin/main"], cwd=wt).stdout.split())
+    changed |= set(sh(["git", "ls-files", "--others", "--exclude-standard", "--", "apps"], cwd=wt).stdout.split())
+    bad = []
+    for f in sorted(changed):
+        if not (f.startswith(f"apps/{app}/tests/") and f.endswith(".yaml") and (wt / f).exists()):
+            continue
+        if not KNOWN_BUG_TAG.search((wt / f).read_text()):
+            continue
+        old = sh(["git", "show", f"origin/main:{f}"], cwd=wt, check=False)  # non-zero = file is new on this branch
+        if old.returncode or not KNOWN_BUG_TAG.search(old.stdout):
+            bad.append(f)
+    return bad
+
+
 def fix_is_legit(wt, app):
     """Code-level spec-integrity gate: a fix may only touch existing flow files and may not change any assertion."""
     files = sh(["git", "diff", "--name-only"], cwd=wt).stdout.split()
@@ -548,6 +569,9 @@ def fix_is_legit(wt, app):
         old = sh(["git", "show", f"HEAD:{f}"], cwd=wt).stdout
         if assert_lines(old) != assert_lines((wt / f).read_text()):
             return False, f"{f}: assertion lines changed"
+    tagged = new_known_bug_tags(wt, app)
+    if tagged:
+        return False, f"added the known-bug tag (only a human may, after filing a bug ticket): {tagged}"
     return True, ""
 
 
@@ -572,6 +596,8 @@ def _stage_build(key, app):
                   f"the build is already installed on it. Keep every hard guardrail (inspect_screen before "
                   f"selectors, 15 actions / 5 rounds per case). "
                   f"If a case cannot be automated within the ceiling, skip its flow and say so in your final message. "
+                  f"Never add a `known-bug` tag or a `# Known-bug:` header: only a human may, after filing a bug ticket. "
+                  f"If a flow fails because the app seems to differ from the spec, leave the flow as written and report it. "
                   f"Run `bin/qa-check {app}` before finishing. Do not run the test suite — the runner does that.")
         out = claude("build", key, app, wt, prompt, agent="automation-writer",
                      tools=BASE_TOOLS + ["Write", "Edit", f"Bash(bin/qa-check:*)", "Bash(bin/qa install:*)", "Bash(ls:*)",
@@ -581,6 +607,15 @@ def _stage_build(key, app):
         check = sh(["bin/qa-check", app], cwd=wt, check=False)
         if check.returncode:
             return fail(key, app, f"bin/qa-check failed after generation:\n{check.stdout[-800:]}")
+        tagged = new_known_bug_tags(wt, app)
+        if tagged:
+            # Scoped to apps/ like the fix gate. Leaving the files would let a retry commit the tagged flows.
+            sh(["git", "checkout", "--", "apps"], cwd=wt)
+            sh(["git", "clean", "-fdq", "--", "apps"], cwd=wt)
+            return fail(key, app, f"the writer tagged flows `known-bug`, which only a human may do after filing a real bug "
+                                  f"ticket (a tagged flow is skipped, so it could not turn the PR red). Generated flows were "
+                                  f"discarded. If this is a real app bug: file the bug ticket, then add the tag by hand. "
+                                  f"Flows: {', '.join(tagged)}")
         commit(wt, f"{key}: Stage 4 Maestro flows\n\nTicket: {key}")
     mods = changed_modules(wt, app)
     missing = missing_flows(wt, app, key)
