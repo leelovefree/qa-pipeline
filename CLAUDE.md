@@ -7,7 +7,7 @@ Full design spec: `docs/requirements.md` — read the relevant section before wo
 ## Layout
 
 ```
-.claude/agents/            spec-extractor (Stage 2), automation-writer (Stages 3+4), flow-fixer (selector/timing repairs)
+.claude/agents/            spec-extractor (Stage 2), case-designer (Stage 3), automation-writer (Stage 4), flow-fixer (selector/timing repairs)
 .claude/commands/          /spec /cases /flows /run /fix /pr — manual, one session per stage
 bin/qa                     runner: install a build + run Maestro flows (same command locally and in CI)
 bin/qa-auto                 unattended driver: Jira label `qa-auto` → spec → (QA approves) → tests → PR, in your checkout on branch qa/<KEY>
@@ -37,7 +37,7 @@ docs/                      design spec + onboarding guide
 |---|---|---|
 | 1. Intake | Human (ticket) | — |
 | 2. Parse & Clarify | `spec-extractor` | implemented |
-| 3. Design cases | `automation-writer` (splits into `case-designer` in Phase 3) | implemented |
+| 3. Design cases | `case-designer` | implemented |
 | 4. Observe & Generate | `automation-writer` | implemented |
 | 5. Commit & Review | Human (PR in this repo) | process |
 | 6. CI Regression | `regression.yml` + `bin/qa` — no AI | implemented |

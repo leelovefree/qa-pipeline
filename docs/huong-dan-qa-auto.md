@@ -178,7 +178,7 @@ Ví dụ: bạn tự làm tay `/spec` và `/cases`, rồi muốn AI lo phần c�
 |---|---|
 | `bin/qa-auto` | Điều phối chế độ tự động |
 | `bin/qa`, `bin/qa-check` | Cài build + chạy flow; kiểm độ phủ rule |
-| `.claude/agents/spec-extractor.md` · `automation-writer.md` · `flow-fixer.md` | Agent từng stage |
+| `.claude/agents/spec-extractor.md` · `case-designer.md` · `automation-writer.md` · `flow-fixer.md` | Agent từng stage |
 | `.claude/commands/*.md` | Các lệnh `/spec /cases /flows /run /fix /pr` |
 | `templates/launchd/` | Tùy chọn: chạy poller nền trên macOS |
 | `.qa-work/` | Thư mục tạm (gitignored) |

@@ -34,7 +34,7 @@ Dành cho QA mới tham gia: dựng lại toàn bộ hệ thống từ đầu tr
 |---|---|---|
 | 1. Intake | QA/PO | Viết ticket Jira có acceptance criteria |
 | 2. Parse & Clarify | Agent `spec-extractor` | Ticket → `apps/<app>/specs/<TICKET>/spec.md` (hoặc `open-questions.md` + **dừng**) |
-| 3. Design cases | Agent `automation-writer` | spec → `apps/<app>/tests/<module>/<feature>/CASES.md` |
+| 3. Design cases | Agent `case-designer` | spec → `apps/<app>/tests/<module>/<feature>/CASES.md` |
 | 4. Observe & Generate | Agent `automation-writer` | CASES.md + app đang chạy → `<REQUIREMENT_ID>.yaml` (Maestro) |
 | 5. Commit & Review | QA (con người) | PR vào repo QA, review, merge |
 | 6. CI Regression | GitHub Actions, **không AI** | Cài build → chạy Maestro → pass/fail |
@@ -120,7 +120,8 @@ qa-pipeline/
   CLAUDE.md                       # nguyên tắc chung — Claude Code đọc tự động
   .claude/agents/
     spec-extractor.md             # Stage 2
-    automation-writer.md          # Stage 3 + 4
+    case-designer.md              # Stage 3
+    automation-writer.md          # Stage 4
   bin/qa                          # runner: cài build + chạy Maestro (chmod +x)
   .github/workflows/
     regression.yml                # CÁCH test (dùng chung, không AI)
@@ -276,7 +277,7 @@ Use the spec-extractor agent on <TICKET-ID> for app <app>
 
 ### Stage 3: Test case (session 2)
 ```
-Use the automation-writer agent for <TICKET-ID> (app <app>), Stage 3 only
+Use the case-designer agent for <TICKET-ID> (app <app>)
 ```
 - Kết quả: `apps/<app>/tests/<module>/<feature>/CASES.md`, mỗi rule có một case (preconditions, steps,
   expected).

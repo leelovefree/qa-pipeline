@@ -420,7 +420,7 @@ def stage_cases(key, app):
               f"in plain business language (no selectors). Directly under the 'Source spec' line of every CASES.md block you "
               f"add, write exactly: `Status: awaiting QA approval (Stage 3, ticket {key})`. A human reviews the cases on the "
               f"ticket before any automation is written.")
-    claude("cases", key, app, wt, prompt, agent="automation-writer",
+    claude("cases", key, app, wt, prompt, agent="case-designer",
            tools=BASE_TOOLS + ["Write", "Edit", "Bash(ls:*)"])
     cases = case_blocks(wt, app)
     missing = [i for i in ids if i not in cases]
@@ -613,8 +613,8 @@ def _stage_build(key, app):
     if missing_flows(wt, app, key):
         mark_cases_approved(wt, app, key)
         prompt = (f"Stage 4 ONLY for ticket {key}, app {app}. A human has APPROVED the spec and the CASES.md entries "
-                  f"for this ticket (label {L_APPROVED} on the ticket), so you are authorised to generate the flows now — this "
-                  f"replaces the 'ask before Stage 4' step. Do not redesign or edit any CASES.md expected result. Use the "
+                  f"for this ticket (label {L_APPROVED} on the ticket), so you are authorised to generate the flows now. "
+                  f"Do not redesign or edit any CASES.md expected result. Use the "
                   f"simulator with device_id {udid} — use ONLY that device, other simulators on this machine are not yours — "
                   f"the build is already installed on it. Keep every hard guardrail (inspect_screen before "
                   f"selectors, 15 actions / 5 rounds per case). "
