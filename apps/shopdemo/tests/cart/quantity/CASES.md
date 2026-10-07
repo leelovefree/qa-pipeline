@@ -52,3 +52,17 @@ Status: approved (spec labelled `qa-approved`); automated by the co-located `<RE
 2. Tap "−" on that line once.
 
 **Expected result:** The line quantity shows 1.
+
+---
+
+Source spec: `apps/shopdemo/specs/SCRUM-10/spec.md` (ticket SCRUM-10 — Cart: quantity increases to 3 after two taps on "+")
+Status: approved by QA (manual review, no Jira label); automated by the co-located `<REQUIREMENT_ID>.yaml` flows (Stage 4).
+
+### CART.QUANTITY.INCREASE_ONE_TO_THREE
+**Preconditions:** App launched with cleared state (cart empty); logged in with the standard test account (see AUTH.LOGIN.SUCCESS_VALID_CREDENTIALS); home screen shown.
+**Steps:**
+1. Open the first product and tap "Buy Now" (quantity 1). "My Cart" opens with exactly one line at quantity 1.
+2. Tap "+" on that line once.
+3. Tap "+" on that line a second time.
+
+**Expected result:** After step 2 the line quantity shows 2. After step 3 the line quantity shows 3.

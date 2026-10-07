@@ -1,0 +1,49 @@
+# Requirement: CART.QUANTITY.INCREASE_ONE_TO_THREE
+# Ticket: SCRUM-10 | Spec: apps/shopdemo/specs/SCRUM-10/spec.md | Case: apps/shopdemo/tests/cart/quantity/CASES.md
+# Selectors observed via Maestro MCP inspect_screen on iPhone 17 (iOS 26.5) simulator, 2026-10-07.
+# Row "+" is the row element with text "Add"; quantity label zero-padded ("01"), matched "^0*<n>$".
+appId: com.qademo.iosshopdemo
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login_email_field
+- inputText: demo@shop.com
+- tapOn:
+    id: login_password_field
+- inputText: "123456"
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"
+- assertVisible:
+    id: home_screen
+# Step 1: one line at quantity 1
+- tapOn: "Defile Lux Blazer"
+- tapOn:
+    id: product_detail_buy_now_button
+- assertVisible:
+    id: cart_screen
+    text: "My Cart"
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*1$"
+# Step 2: tap "+" once
+- tapOn:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Add"
+# Expected after step 2: quantity shows 2
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*2$"
+# Step 3: tap "+" a second time
+- tapOn:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "Add"
+# Expected after step 3: quantity shows 3
+- assertVisible:
+    id: cart_item_row_defile-lux-blazer-s-beige
+    text: "^0*3$"
