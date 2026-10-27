@@ -347,6 +347,37 @@ File `.github/workflows/app-<app>.yml`:
 
 Kết quả pass/fail là **exit code của Maestro**. Không có bước AI nào trong CI.
 
+**Runner chậm (lỗi hạ tầng):** runner macOS miễn phí đôi khi làm driver iOS đứng. Flow bị cắt giữa chừng mà Maestro không ghi lại bước nào lỗi, rồi các flow sau không mở nổi app.
+`bin/qa` xử lý đúng một lần: chỉ những flow **không có bước FAILED** mới được chạy lại, sau khi khởi động lại simulator (`QA_BOOT_TIMEOUT` mặc định 300 giây). Flow có bước lỗi thật (sai selector, assertion, lỗi app) thì không bao giờ được thử lại.
+Nếu Maestro không khởi động nổi driver iOS trước flow đầu tiên (`iOS driver not ready in time`, giới hạn mặc định của Maestro là 120 giây, mà runner cần 50 đến 110 giây), `bin/qa` nâng giới hạn lên 180 giây (`MAESTRO_DRIVER_STARTUP_TIMEOUT`) và lặp lại cả lần chạy đúng một lần.
+Một lỗi thật ở lượt đầu vẫn giữ run đỏ dù các flow khác được cứu. Flow nào chỉ pass nhờ retry sẽ được liệt kê trong *Job summary* của GitHub: đó là cảnh báo runner không ổn định, không phải tin vui.
+Artifact `debug-<app>` có `debug/` (lượt 1), `debug-retry/` (lượt 2), `report.attempt1.xml`, kèm `device-xctest.log` và `maestro.log` để biết vì sao driver dừng. Tắt retry khi cần chẩn đoán: `QA_NO_RETRY=1 bin/qa run ...`.
+
+---
+
+### 7.1 Khi nightly đỏ: Stage 7 `bin/qa-repair`, và báo cáo Stage 8
+
+CI chỉ chạy test, không có AI. Khi nightly đỏ trên flow đã merge, bạn chạy tay (cần Claude Code + simulator, tốn hạn mức Claude):
+
+```bash
+bin/qa-repair <app> [--module <module/feature>] [--max-flows 5] [--dry-run]
+```
+
+Nó tạo simulator mới, chạy lại suite, rồi với mỗi flow đỏ (tối đa 5) gọi `repair-agent` chẩn đoán **từ màn hình thật**:
+
+| Chẩn đoán | Việc xảy ra |
+|---|---|
+| `UI_CHANGE` (selector/timing đổi, hành vi đúng) | Agent sửa flow. Code kiểm tra patch (không đổi/xóa/thêm assertion, không `optional: true`, không tag `known-bug`, chỉ sửa đúng flow đó hoặc `shared/`), rồi **chạy lại bằng `bin/qa`**. Chỉ khi chạy lại xanh mới commit. Tối đa 2 lần/flow. |
+| `APP_BUG_SUSPECTED` / `UNCLEAR` | Không sửa gì. Flow vẫn đỏ, bạn phân loại A/B/C/D (mục 9.1). |
+
+Agent cần Maestro MCP cấu hình cho đúng thư mục repo này (project scope, mục 2.1). Thiếu MCP thì nó chỉ dựa vào ảnh và hierarchy đã lưu lúc lỗi, nên dễ trả `UNCLEAR` hơn.
+Kết quả luôn là PR cho người duyệt (draft nếu suite cuối chưa xanh hoặc có assertion-selector cần soi), kèm báo cáo `apps/<app>/reports/repair/run-<timestamp>.md`.
+Không sửa được flow nào thì không có PR, báo cáo nằm ở `.qa-work/repair/`, exit code 1.
+Assertion có `id:` đổi tên là trường hợp khó: mặc định bị chặn (cần người sửa); `--allow-assert-selector` cho phép đổi **chỉ `id:`**, mọi giá trị khác phải y nguyên, và PR luôn là draft để bạn soi.
+
+**Stage 8 — báo cáo:** `bin/qa-auto` tự chạy `bin/qa-report <KEY>` sau khi mở PR và đẩy file `apps/<app>/reports/<KEY>/run-<timestamp>.md` lên cùng PR. Chạy tay: `bin/qa-report <KEY>`.
+Nội dung lấy từ code, không dùng AI: rule nào đã có case/flow và kết quả chạy gần nhất, model/token/chi phí từng bước, số lần sửa, mốc label `qa-approved` trên Jira, review/merge của PR, link ticket và PR. Báo cáo cố ý không ghi tên người duyệt (xem trên PR/ticket).
+
 ---
 
 ## 8. Lỗi thường gặp
@@ -395,8 +426,7 @@ Người (không phải AI) phân loại mỗi lần fail trước khi làm gì 
 
 ## 10. Chưa làm (lộ trình)
 
-- **Stage 7 — repair-agent:** tự sửa test khi chỉ đổi selector, từ chối khi app có lỗi thật.
-- **Stage 8 — reporter:** báo cáo mỗi lần chạy (model, số lần thử, chi phí, người duyệt).
+- ~~Stage 7 — repair-agent, Stage 8 — reporter~~ — xong: `bin/qa-repair`, `bin/qa-report` (mục 7.1). Còn thiếu: tóm tắt AI (haiku) cho báo cáo, trần chi phí/ngày, kích hoạt Stage 7 tự động từ CI đỏ, đo độ chính xác tự sửa bằng build có đáp án biết trước (`docs/requirements.md` §8).
 - **Android runner** trong `bin/qa`.
 - ~~Script kiểm tra độ phủ~~ — xong: `bin/qa-check` (độ phủ spec → CASES.md; flow `known-bug` phải có ticket), chạy trên CI qua `qa-check.yml`.
 - Tiêu chí "atomic rule" và kỹ thuật thiết kế test (negative, boundary) cho các agent.
