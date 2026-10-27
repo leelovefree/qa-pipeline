@@ -2,6 +2,7 @@
 """qa-junit — helper for bin/qa's one-shot infrastructure retry. No device, no AI.
 
   qa-junit classify <report.xml> <debug-dir>     one line per failed flow:  INFRA <id> <file>  |  REAL <id>
+                                                 (a missing or unreadable report prints nothing and exits 0)
   qa-junit merge <report1.xml> <retry.xml> <out> replace the retried flows in report1 by their retry result; prints
                                                  PASSED_ON_RETRY <id> / STILL_FAILED <id> per retried flow
 
@@ -63,7 +64,11 @@ def merge(report1, retry, out):
 
 def main(argv):
     if len(argv) == 4 and argv[1] == "classify":
-        for kind, fid, file in classify(argv[2], argv[3]):
+        try:
+            rows = classify(argv[2], argv[3])
+        except (OSError, ET.ParseError):  # no report to read: the caller decides what that means
+            rows = []
+        for kind, fid, file in rows:
             print(f"{kind} {fid} {file}".rstrip())
     elif len(argv) == 5 and argv[1] == "merge":
         for kind, fid in merge(argv[2], argv[3], argv[4]):

@@ -26,6 +26,13 @@ FAKE_MAESTRO = textwrap.dedent('''\
     flows = [x for x in a if x.endswith(".yaml")]
     state = Path(os.environ["FAKE_STATE"]); n = int(state.read_text()) + 1 if state.exists() else 1; state.write_text(str(n))
     plan = json.loads(Path(os.environ["FAKE_PLAN"]).read_text())[str(n)]
+    startup = plan.get("__startup__")
+    if startup == "driver_timeout":  # Maestro dies before the first flow and writes no report
+        print("iOS driver not ready in time, consider increasing timeout by configuring MAESTRO_DRIVER_STARTUP_TIMEOUT env variable", file=sys.stderr)
+        sys.exit(1)
+    if startup == "bad_syntax":
+        print("Flow syntax error in A.yaml", file=sys.stderr)
+        sys.exit(1)
     cases, bad = [], 0
     for f in flows:
         fid = Path(f).stem; how = plan.get(fid, "pass"); d = Path(dbg) / fid; d.mkdir(parents=True, exist_ok=True)
@@ -111,6 +118,33 @@ class RetryTest(unittest.TestCase):
     def test_green_run_never_retries(self):
         r = self.run_qa({"1": {}})
         self.assertEqual((r.returncode, self.attempts), (0, 1))
+
+    def test_driver_that_never_starts_retries_the_whole_run_once(self):
+        r = self.run_qa({"1": {"__startup__": "driver_timeout"}, "2": {}})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.attempts, 2)
+        self.assertEqual(self.final(), {"A": True, "B": True, "C": True})  # all flows ran in the retry
+
+    def test_driver_that_never_starts_twice_stays_red_after_one_retry(self):
+        r = self.run_qa({"1": {"__startup__": "driver_timeout"}, "2": {"__startup__": "driver_timeout"}})
+        self.assertEqual((r.returncode, self.attempts), (1, 2))
+
+    def test_run_without_report_and_without_driver_message_is_not_retried(self):
+        r = self.run_qa({"1": {"__startup__": "bad_syntax"}, "2": {}})
+        self.assertEqual((r.returncode, self.attempts), (1, 1))
+
+    def test_stale_report_from_an_earlier_run_is_never_read(self):
+        self.run_qa({"1": {"A": "cut_off"}, "2": {"A": "cut_off"}})  # leaves a red report.xml behind
+        (self.tmp / "state").unlink()
+        r = self.run_qa({"1": {"__startup__": "bad_syntax"}, "2": {}})
+        self.assertEqual((r.returncode, self.attempts), (1, 1))  # not "A was cut off" from the old report
+
+    def test_driver_startup_timeout_is_raised_unless_set(self):
+        (self.tmp / "fakebin/maestro").write_text("#!/bin/sh\necho \"T=$MAESTRO_DRIVER_STARTUP_TIMEOUT\" > \"$FAKE_STATE\"\nexit 0\n")
+        for extra, want in (({}, "180000"), ({"MAESTRO_DRIVER_STARTUP_TIMEOUT": "42"}, "42")):
+            subprocess.run([str(self.tmp / "bin/qa"), "run", "demo", "--no-install", "--device", UDID], cwd=self.tmp,
+                           env=dict(self.env, **extra), capture_output=True, text=True, timeout=120)
+            self.assertEqual((self.tmp / "state").read_text().strip(), f"T={want}")
 
     def test_first_attempt_report_is_kept_for_the_audit(self):
         self.run_qa({"1": {"A": "cut_off"}, "2": {}})

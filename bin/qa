@@ -202,42 +202,68 @@ do_run() {
   log "running ${#flows[@]} flow(s) from ${dir#$ROOT/} on $UDID"
   mkdir -p "$WORK/$APP"
   # Failure evidence (screenshot + view hierarchy + failed command per flow) goes to .qa-work/<app>/debug, which CI uploads.
-  local debug="$WORK/$APP/debug" rc=0
-  rm -rf "$debug"
+  local debug="$WORK/$APP/debug" retry_debug="$WORK/$APP/debug-retry" report="$WORK/$APP/report.xml" rc=0
+  rm -rf "$debug" "$retry_debug" "$report" "$WORK/$APP/report.attempt1.xml" "$WORK/$APP/report.retry.xml"
+  mkdir -p "$debug"
+  # Maestro gives the iOS driver 120 s to start. On the hosted runner it takes 50-110 s (measured on 7 runs), so one slow
+  # run crosses the limit and dies before the first flow. 180 s leaves headroom; the retry covers a driver that is stuck.
+  export MAESTRO_DRIVER_STARTUP_TIMEOUT="${MAESTRO_DRIVER_STARTUP_TIMEOUT:-180000}"
   maestro --device "$UDID" test ${args[@]+"${args[@]}"} \
-    --format junit --output "$WORK/$APP/report.xml" --debug-output "$debug" --flatten-debug-output "${flows[@]}" || rc=$?
+    --format junit --output "$report" --debug-output "$debug" --flatten-debug-output "${flows[@]}" 2>&1 \
+    | tee "$debug/console.log" || rc=$?   # pipefail: rc is Maestro's own exit code
   redact_debug "$debug"
 
-  # One retry, only for flows Maestro cut off without recording a failed step (see bin/qa-junit). A flow with a failed
-  # step — wrong selector, assertion, app bug — is never retried and stays red. QA_NO_RETRY=1 turns this off.
+  # One retry, only for infrastructure failures (see bin/qa-junit): flows Maestro cut off WITHOUT recording a failed step,
+  # or a run that died before the first flow because the iOS driver never started. A flow with a failed step — wrong
+  # selector, assertion, app bug — is never retried and stays red. QA_NO_RETRY=1 turns this off.
   if [ "$rc" -ne 0 ] && [ -z "${QA_NO_RETRY:-}" ]; then
     local kind id file real=0 infra=() again=()
-    while read -r kind id file; do
-      case "$kind" in
-        INFRA) infra+=("$id"); case "$file" in /*) again+=("$file") ;; *) again+=("$ROOT/$file") ;; esac ;;
-        REAL) real=$((real + 1)) ;;
-      esac
-    done < <("$ROOT/bin/qa-junit" classify "$WORK/$APP/report.xml" "$debug")
-    if [ "${#infra[@]}" -gt 0 ]; then
-      log "infrastructure failure, no failed step recorded for: ${infra[*]} — restarting the simulator and retrying these once"
-      cp "$WORK/$APP/report.xml" "$WORK/$APP/report.attempt1.xml"
-      reset_simulator "$UDID"
-      local rc2=0 retry_debug="$WORK/$APP/debug-retry"
-      rm -rf "$retry_debug"
-      maestro --device "$UDID" test ${args[@]+"${args[@]}"} \
-        --format junit --output "$WORK/$APP/report.retry.xml" --debug-output "$retry_debug" --flatten-debug-output "${again[@]}" || rc2=$?
-      redact_debug "$retry_debug"
-      local note
-      note=$("$ROOT/bin/qa-junit" merge "$WORK/$APP/report.attempt1.xml" "$WORK/$APP/report.retry.xml" "$WORK/$APP/report.xml" | tr '\n' ' ')
-      log "retry result: $note"
-      [ -z "${GITHUB_STEP_SUMMARY:-}" ] || {
-        echo "### Infrastructure retry"
-        echo "Flows with no failed step were retried once on a restarted simulator: ${infra[*]}"
-        echo "Result: $note"
-        echo "Passing only on retry means the runner is unstable — look at debug/ and debug-retry/ in the artifact."
-      } >> "$GITHUB_STEP_SUMMARY"
-      # Verdict = Maestro's own exit codes: a real failure from the first run stays red, otherwise the retry decides.
-      if [ "$real" -gt 0 ]; then :; else rc="$rc2"; fi
+    if [ ! -f "$report" ]; then
+      # No report at all. Retry the whole run only if the console says the driver did not start; a flow with a syntax
+      # error also produces no report and must stay red without a pointless second boot.
+      if grep -qE 'iOS driver not ready in time|IOSDriverTimeoutException' "$debug/console.log" 2>/dev/null; then
+        log "the iOS driver did not start before the first flow — restarting the simulator and retrying the whole run once"
+        reset_simulator "$UDID"
+        rc=0
+        mkdir -p "$retry_debug"
+        maestro --device "$UDID" test ${args[@]+"${args[@]}"} \
+          --format junit --output "$report" --debug-output "$retry_debug" --flatten-debug-output "${flows[@]}" 2>&1 \
+          | tee "$retry_debug/console.log" || rc=$?
+        redact_debug "$retry_debug"
+        [ -z "${GITHUB_STEP_SUMMARY:-}" ] || {
+          echo "### Infrastructure retry"
+          echo "The iOS driver did not start in time; the whole run was repeated once on a restarted simulator (exit code $rc)."
+        } >> "$GITHUB_STEP_SUMMARY"
+      fi
+    else
+      while read -r kind id file; do
+        case "$kind" in
+          INFRA) infra+=("$id"); case "$file" in /*) again+=("$file") ;; *) again+=("$ROOT/$file") ;; esac ;;
+          REAL) real=$((real + 1)) ;;
+        esac
+      done < <("$ROOT/bin/qa-junit" classify "$report" "$debug")
+      if [ "${#infra[@]}" -gt 0 ]; then
+        log "infrastructure failure, no failed step recorded for: ${infra[*]} — restarting the simulator and retrying these once"
+        cp "$report" "$WORK/$APP/report.attempt1.xml"
+        reset_simulator "$UDID"
+        local rc2=0
+        mkdir -p "$retry_debug"
+        maestro --device "$UDID" test ${args[@]+"${args[@]}"} \
+          --format junit --output "$WORK/$APP/report.retry.xml" --debug-output "$retry_debug" --flatten-debug-output "${again[@]}" 2>&1 \
+          | tee "$retry_debug/console.log" || rc2=$?
+        redact_debug "$retry_debug"
+        local note
+        note=$("$ROOT/bin/qa-junit" merge "$WORK/$APP/report.attempt1.xml" "$WORK/$APP/report.retry.xml" "$report" | tr '\n' ' ')
+        log "retry result: $note"
+        [ -z "${GITHUB_STEP_SUMMARY:-}" ] || {
+          echo "### Infrastructure retry"
+          echo "Flows with no failed step were retried once on a restarted simulator: ${infra[*]}"
+          echo "Result: $note"
+          echo "Passing only on retry means the runner is unstable — look at debug/ and debug-retry/ in the artifact."
+        } >> "$GITHUB_STEP_SUMMARY"
+        # Verdict = Maestro's own exit codes: a real failure from the first run stays red, otherwise the retry decides.
+        if [ "$real" -gt 0 ]; then :; else rc="$rc2"; fi
+      fi
     fi
   fi
   return "$rc"  # always a Maestro exit code
