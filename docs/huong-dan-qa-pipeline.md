@@ -364,6 +364,7 @@ Nó tạo simulator mới, chạy lại suite, rồi với mỗi flow đỏ (t�
 | `UI_CHANGE` (selector/timing đổi, hành vi đúng) | Agent sửa flow. Code kiểm tra patch (không đổi/xóa/thêm assertion, không `optional: true`, không tag `known-bug`, chỉ sửa đúng flow đó hoặc `shared/`), rồi **chạy lại bằng `bin/qa`**. Chỉ khi chạy lại xanh mới commit. Tối đa 2 lần/flow. |
 | `APP_BUG_SUSPECTED` / `UNCLEAR` | Không sửa gì. Flow vẫn đỏ, bạn phân loại A/B/C/D (mục 9.1). |
 
+Agent cần Maestro MCP cấu hình cho đúng thư mục repo này (project scope, mục 2.1). Thiếu MCP thì nó chỉ dựa vào ảnh và hierarchy đã lưu lúc lỗi, nên dễ trả `UNCLEAR` hơn.
 Kết quả luôn là PR cho người duyệt (draft nếu suite cuối chưa xanh hoặc có assertion-selector cần soi), kèm báo cáo `apps/<app>/reports/repair/run-<timestamp>.md`.
 Không sửa được flow nào thì không có PR, báo cáo nằm ở `.qa-work/repair/`, exit code 1.
 Assertion có `id:` đổi tên là trường hợp khó: mặc định bị chặn (cần người sửa); `--allow-assert-selector` cho phép đổi **chỉ `id:`**, mọi giá trị khác phải y nguyên, và PR luôn là draft để bạn soi.

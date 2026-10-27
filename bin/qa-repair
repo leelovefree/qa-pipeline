@@ -182,7 +182,8 @@ def repair_one(rid, app, wt, udid, rec, args):
         reply = res.get("result") or ""
         m, e = DIAGNOSIS.search(reply), EVIDENCE.search(reply)
         out["diagnosis"] = m.group(1) if m else "UNPARSEABLE"
-        out["evidence"] = (e.group(1).strip() if e else " ".join(reply.split())[:300])[:400]
+        ev = e.group(1).strip() if e else " ".join(reply.split())
+        out["evidence"] = ev if len(ev) <= 500 else ev[:497] + "..."
         if out["diagnosis"] != "UI_CHANGE":
             revert(wt)  # nothing may be edited unless the agent can show the UI changed
             out["outcome"] = {"APP_BUG_SUSPECTED": "ESCALATED_APP_BUG_SUSPECTED", "UNCLEAR": "ESCALATED_UNCLEAR"}.get(
