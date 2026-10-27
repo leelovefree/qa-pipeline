@@ -52,6 +52,11 @@ docs/                      design spec + onboarding guide
 
 Stage 6 — the test runner decides, not an LLM. `bin/qa` returns Maestro's own exit code; never wrap it
 in anything that can turn a failure into a pass, and never add `maestro test --analyze` (AI) to CI.
+The one deliberate exception is the infrastructure retry (`bin/qa`, `bin/qa-junit`, tests in `bin/tests/`): a flow that
+Maestro cut off *without recording any failed step* (stalled iOS driver on a slow runner) is re-run once on a restarted
+simulator. A flow with a failed step (selector, assertion, app bug) is never retried, a real failure keeps the run red even
+if other flows are rescued, the first-attempt report and debug output are kept, and CI prints every retried flow in the job
+summary. Do not widen this: no second retry, no retry keyed on test names or on an error message.
 `bin/qa install` refuses a build whose bundle id differs from the app's `app_id`.
 
 Spec integrity — a failing test is never fixed by editing its spec. No agent edits `spec.md`, a CASES.md

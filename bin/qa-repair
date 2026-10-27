@@ -125,7 +125,7 @@ def failures_from_report(wt, app, rid):
         if bad is None:
             continue
         fid = case.get("id") or case.get("name")
-        rec = {"flow": fid, "requirement_id": fid, "file": case.get("file"),
+        rec = {"flow": fid, "requirement_id": fid, "file": case.get("file"), "infra_suspect": False,
                "message": " ".join(((bad.text or bad.get("message") or "(no message)").strip()).split())[:600],
                "artifacts": [], "failed_command": None}
         for d in (debug.glob(f"**/{fid}") if debug.exists() else []):
@@ -138,6 +138,8 @@ def failures_from_report(wt, app, rid):
                     if c.get("metadata", {}).get("status") == "FAILED":
                         rec["failed_command"] = {"command": next(iter(c["command"]), "?"),
                                                  "error": (c["metadata"].get("error") or {}).get("message", "")[:300]}
+                # Commands were recorded but none failed: Maestro was cut off (driver stalled), nothing for an agent to repair.
+                rec["infra_suspect"] = rec["failed_command"] is None
             except (OSError, json.JSONDecodeError, AttributeError, TypeError):
                 pass
         out.append(rec)
@@ -166,6 +168,10 @@ def repair_one(rid, app, wt, udid, rec, args):
            "attempts": 0, "notes": [], "commit": None}
     if not path:
         out["outcome"] = "FLOW_FILE_NOT_FOUND"
+        return out
+    if rec.get("infra_suspect"):  # bin/qa already retried these once; an agent cannot fix a stalled runner
+        out["outcome"] = "INFRA_SUSPECTED"
+        out["evidence"] = "No failed step was recorded (the flow was cut off after bin/qa's one retry). Not sent to the agent."
         return out
     prior = ""
     for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
@@ -221,7 +227,7 @@ def render_report(rid, app, results, baseline, final, models, cost, status, pr_u
          f"Generated {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} by `bin/qa-repair` (code; the replay's exit code is the verdict).", "",
          "## Result", "",
          f"- Failing flows at start: **{len(baseline)}** · repaired: **{sum(r['outcome'] == 'REPAIRED' for r in results)}** · "
-         f"escalated to a human: **{sum(r['outcome'].startswith(('ESCALATED', 'REJECTED', 'REPLAY', 'NO_CHANGE', 'FLOW')) for r in results)}**"
+         f"escalated to a human: **{sum(r['outcome'].startswith(('ESCALATED', 'REJECTED', 'REPLAY', 'NO_CHANGE', 'FLOW', 'INFRA')) for r in results)}**"
          f" · not attempted (cap): **{sum(r['outcome'] == 'NOT_ATTEMPTED' for r in results)}**",
          f"- Final full-suite run after the repairs: {final}",
          f"- PR status: {status}" + (f" — {pr_url}" if pr_url else ""),
@@ -235,6 +241,7 @@ def render_report(rid, app, results, baseline, final, models, cost, status, pr_u
         L += ["", "## Reviewer must check", ""] + [f"- {n}" for n in notes]
     L += ["", "## What a human does next", "",
           "- `REPAIRED`: review the diff — the PR must show only selector/timing changes and no changed assertion.",
+          "- `INFRA_SUSPECTED`: no step failed — the runner stalled. Re-run `bin/qa-repair` or check the runner; nothing to repair.\n"
           "- `ESCALATED_*` / `REJECTED_BY_GATE` / `REPLAY_RED`: the flow stays red. Triage per docs/huong-dan-qa-pipeline.md §9.1 "
           "(A app bug → bug ticket · B ticket wrong · C AI misread → spec PR with reason · D requirement changed → new ticket). "
           "Do not edit the spec or an assertion to make it pass."]
