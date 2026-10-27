@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""qa-junit — helper for bin/qa's one-shot infrastructure retry. No device, no AI.
+
+  qa-junit classify <report.xml> <debug-dir>     one line per failed flow:  INFRA <id> <file>  |  REAL <id>
+  qa-junit merge <report1.xml> <retry.xml> <out> replace the retried flows in report1 by their retry result; prints
+                                                 PASSED_ON_RETRY <id> / STILL_FAILED <id> per retried flow
+
+A failed flow is INFRA when Maestro recorded no failed step for it: the flow was cut off (a command still RUNNING,
+e.g. the iOS driver stopped answering) instead of reporting "Element not found" / "Assertion is false". Every genuine
+selector, assertion or app failure has a FAILED command with an error message, so it is REAL and is never retried.
+Anything we cannot see evidence for (no commands.json) is REAL too — the conservative answer.
+"""
+import json
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+
+def failed_cases(root):
+    for case in root.iter("testcase"):
+        if case.find("failure") is not None or case.find("error") is not None:
+            yield case
+
+
+def has_failed_step(commands_json):
+    try:
+        return any(c.get("metadata", {}).get("status") == "FAILED" for c in json.loads(commands_json.read_text()))
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        return None  # unreadable: no evidence either way
+
+
+def classify(report, debug):
+    out = []
+    for case in failed_cases(ET.parse(report).getroot()):
+        fid = case.get("id") or case.get("name")
+        cj = Path(debug) / fid / "commands.json"
+        failed_step = has_failed_step(cj) if cj.exists() else None
+        if failed_step is False:  # commands.json exists and no step failed: the flow was cut off
+            out.append(("INFRA", fid, case.get("file") or ""))
+        else:
+            out.append(("REAL", fid, ""))
+    return out
+
+
+def merge(report1, retry, out):
+    tree = ET.parse(report1)
+    again = {c.get("id") or c.get("name"): c for c in ET.parse(retry).getroot().iter("testcase")}
+    lines = []
+    for suite in tree.getroot().iter("testsuite"):
+        for i, case in enumerate(list(suite)):
+            fid = case.get("id") or case.get("name")
+            if case.tag == "testcase" and fid in again:
+                suite.remove(case)
+                suite.insert(i, again[fid])
+                bad = again[fid].find("failure") is not None or again[fid].find("error") is not None
+                lines.append(("STILL_FAILED" if bad else "PASSED_ON_RETRY", fid))
+        cases = [c for c in suite if c.tag == "testcase"]
+        suite.set("tests", str(len(cases)))
+        suite.set("failures", str(sum(1 for c in cases if c.find("failure") is not None or c.find("error") is not None)))
+    tree.write(out, encoding="UTF-8", xml_declaration=True)
+    return lines
+
+
+def main(argv):
+    if len(argv) == 4 and argv[1] == "classify":
+        for kind, fid, file in classify(argv[2], argv[3]):
+            print(f"{kind} {fid} {file}".rstrip())
+    elif len(argv) == 5 and argv[1] == "merge":
+        for kind, fid in merge(argv[2], argv[3], argv[4]):
+            print(f"{kind} {fid}")
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv)

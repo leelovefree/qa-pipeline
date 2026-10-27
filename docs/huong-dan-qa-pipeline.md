@@ -347,6 +347,11 @@ File `.github/workflows/app-<app>.yml`:
 
 Kết quả pass/fail là **exit code của Maestro**. Không có bước AI nào trong CI.
 
+**Runner chậm (lỗi hạ tầng):** runner macOS miễn phí đôi khi làm driver iOS đứng. Flow bị cắt giữa chừng mà Maestro không ghi lại bước nào lỗi, rồi các flow sau không mở nổi app.
+`bin/qa` xử lý đúng một lần: chỉ những flow **không có bước FAILED** mới được chạy lại, sau khi khởi động lại simulator (`QA_BOOT_TIMEOUT` mặc định 300 giây). Flow có bước lỗi thật (sai selector, assertion, lỗi app) thì không bao giờ được thử lại.
+Một lỗi thật ở lượt đầu vẫn giữ run đỏ dù các flow khác được cứu. Flow nào chỉ pass nhờ retry sẽ được liệt kê trong *Job summary* của GitHub: đó là cảnh báo runner không ổn định, không phải tin vui.
+Artifact `debug-<app>` có `debug/` (lượt 1), `debug-retry/` (lượt 2), `report.attempt1.xml`, kèm `device-xctest.log` và `maestro.log` để biết vì sao driver dừng. Tắt retry khi cần chẩn đoán: `QA_NO_RETRY=1 bin/qa run ...`.
+
 ---
 
 ### 7.1 Khi nightly đỏ: Stage 7 `bin/qa-repair`, và báo cáo Stage 8

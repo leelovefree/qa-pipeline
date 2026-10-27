@@ -73,9 +73,10 @@ fetch_build() {
 }
 
 # Boot a simulator with a hard ceiling: `simctl bootstatus` can hang forever on CI runners.
-# Ceiling QA_BOOT_TIMEOUT seconds (default 180) per attempt, 2 attempts, then fail loudly.
+# Ceiling QA_BOOT_TIMEOUT seconds (default 300) per attempt, 2 attempts, then fail loudly. Hosted macOS runners need
+# 2-4 minutes for a cold boot, so a shorter ceiling kills a boot that was still making progress.
 boot_sim() {
-  local udid="$1" limit="${QA_BOOT_TIMEOUT:-180}" attempt pid waited
+  local udid="$1" limit="${QA_BOOT_TIMEOUT:-300}" attempt pid waited
   for attempt in 1 2; do
     xcrun simctl boot "$udid" 2>/dev/null || true
     xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1 &
@@ -166,6 +167,14 @@ for d, _, files in os.walk(sys.argv[1]):
 PY
 }
 
+# Hosted runners sometimes stall the iOS driver: a flow is cut off with no failed step and the flows after it cannot
+# even launch the app. Restart the simulator and driver for the retry; never touches any other simulator.
+reset_simulator() {
+  pkill -f "destination id=$1" 2>/dev/null || true  # orphaned XCTest driver of THIS simulator only
+  xcrun simctl shutdown "$1" 2>/dev/null || true
+  boot_sim "$1"
+}
+
 do_install() {
   local ref app_path actual
   ref="${BUILD:-$(cfg build)}"
@@ -198,7 +207,40 @@ do_run() {
   maestro --device "$UDID" test ${args[@]+"${args[@]}"} \
     --format junit --output "$WORK/$APP/report.xml" --debug-output "$debug" --flatten-debug-output "${flows[@]}" || rc=$?
   redact_debug "$debug"
-  return "$rc"  # Maestro's own exit code, unchanged
+
+  # One retry, only for flows Maestro cut off without recording a failed step (see bin/qa-junit). A flow with a failed
+  # step — wrong selector, assertion, app bug — is never retried and stays red. QA_NO_RETRY=1 turns this off.
+  if [ "$rc" -ne 0 ] && [ -z "${QA_NO_RETRY:-}" ]; then
+    local kind id file real=0 infra=() again=()
+    while read -r kind id file; do
+      case "$kind" in
+        INFRA) infra+=("$id"); case "$file" in /*) again+=("$file") ;; *) again+=("$ROOT/$file") ;; esac ;;
+        REAL) real=$((real + 1)) ;;
+      esac
+    done < <("$ROOT/bin/qa-junit" classify "$WORK/$APP/report.xml" "$debug")
+    if [ "${#infra[@]}" -gt 0 ]; then
+      log "infrastructure failure, no failed step recorded for: ${infra[*]} — restarting the simulator and retrying these once"
+      cp "$WORK/$APP/report.xml" "$WORK/$APP/report.attempt1.xml"
+      reset_simulator "$UDID"
+      local rc2=0 retry_debug="$WORK/$APP/debug-retry"
+      rm -rf "$retry_debug"
+      maestro --device "$UDID" test ${args[@]+"${args[@]}"} \
+        --format junit --output "$WORK/$APP/report.retry.xml" --debug-output "$retry_debug" --flatten-debug-output "${again[@]}" || rc2=$?
+      redact_debug "$retry_debug"
+      local note
+      note=$("$ROOT/bin/qa-junit" merge "$WORK/$APP/report.attempt1.xml" "$WORK/$APP/report.retry.xml" "$WORK/$APP/report.xml" | tr '\n' ' ')
+      log "retry result: $note"
+      [ -z "${GITHUB_STEP_SUMMARY:-}" ] || {
+        echo "### Infrastructure retry"
+        echo "Flows with no failed step were retried once on a restarted simulator: ${infra[*]}"
+        echo "Result: $note"
+        echo "Passing only on retry means the runner is unstable — look at debug/ and debug-retry/ in the artifact."
+      } >> "$GITHUB_STEP_SUMMARY"
+      # Verdict = Maestro's own exit codes: a real failure from the first run stays red, otherwise the retry decides.
+      if [ "$real" -gt 0 ]; then :; else rc="$rc2"; fi
+    fi
+  fi
+  return "$rc"  # always a Maestro exit code
 }
 
 CMD="${1:-}"; [ $# -gt 0 ] && shift

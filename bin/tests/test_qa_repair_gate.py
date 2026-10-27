@@ -137,5 +137,29 @@ class BlockParserTest(unittest.TestCase):
         self.assertEqual(sum(repair.assertion_blocks('- assertVisible: "Hello"\n').values()), 1)
 
 
+class InfraSuspectTest(unittest.TestCase):
+    """A flow with commands but no failed step is a stalled runner, not something for the agent."""
+
+    def _failures(self, steps):
+        import json
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        wt = Path(tmp.name)
+        (wt / ".qa-work/demo/debug/X").mkdir(parents=True)
+        (wt / ".qa-work/demo/debug/X/commands.json").write_text(json.dumps(steps))
+        (wt / ".qa-work/demo/report.xml").write_text(
+            '<testsuites><testsuite><testcase id="X" file="apps/demo/tests/m/f/X.yaml"><failure>boom</failure></testcase></testsuite></testsuites>')
+        return repair.failures_from_report(wt, "demo", "REPAIR-test")[0]
+
+    def test_cut_off_flow_is_infra(self):
+        rec = self._failures([{"command": {"launchAppCommand": {}}, "metadata": {"status": "RUNNING"}}])
+        self.assertTrue(rec["infra_suspect"])
+
+    def test_flow_with_failed_step_is_not_infra(self):
+        rec = self._failures([{"command": {"tapOnElement": {}}, "metadata": {"status": "FAILED", "error": {"message": "nope"}}}])
+        self.assertFalse(rec["infra_suspect"])
+        self.assertEqual(rec["failed_command"]["error"], "nope")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -44,7 +44,7 @@ on:
 jobs:
   regression:
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 60   # full run ~25 min + cold simulator boot + one infrastructure retry (public repo: runner minutes are free)
     steps:
       - uses: actions/checkout@v4
 
@@ -76,14 +76,18 @@ jobs:
           bin/qa run "$APP" ${args[@]+"${args[@]}"}
 
       - name: Upload failure evidence (screenshots, view hierarchy, failed command — secrets redacted)
-        if: failure()
+        # Also when a retry rescued the run: a green job that needed a retry is a warning about the runner, keep the proof.
+        if: failure() || hashFiles(format('.qa-work/{0}/debug-retry/**', inputs.app)) != ''
         uses: actions/upload-artifact@v4
         with:
           name: debug-${{ inputs.app }}
+          # Keeps device-xctest.log and maestro.log (small, and the only place that says why the driver stopped);
+          # drops device-simulator.log (>1 MB per flow, system noise). debug-retry/ exists only after an infrastructure retry.
           path: |
             .qa-work/${{ inputs.app }}/debug
-            !.qa-work/${{ inputs.app }}/debug/**/logs
-            !.qa-work/${{ inputs.app }}/debug/*.log
+            .qa-work/${{ inputs.app }}/debug-retry
+            !.qa-work/${{ inputs.app }}/debug/**/device-simulator.log
+            !.qa-work/${{ inputs.app }}/debug-retry/**/device-simulator.log
           retention-days: 14
           if-no-files-found: ignore
 
@@ -92,5 +96,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: junit-${{ inputs.app }}
-          path: .qa-work/${{ inputs.app }}/report.xml
+          path: |
+            .qa-work/${{ inputs.app }}/report.xml
+            .qa-work/${{ inputs.app }}/report.attempt1.xml
           if-no-files-found: ignore
