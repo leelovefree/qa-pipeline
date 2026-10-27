@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""qa-repair — Stage 7: diagnose and repair already-merged flows that went red. One run, hard ceilings, ends in a PR.
+
+  bin/qa-repair <app> [--module <module/feature>] [--max-flows 5] [--allow-assert-selector] [--dry-run]
+
+Run it after a red nightly (CI itself stays AI-free). It does what a QA would: run the suite on a fresh simulator, take
+each failing flow, and ask the `repair-agent` to diagnose it from the live app. The agent's words are never trusted:
+
+  - APP_BUG_SUSPECTED / UNCLEAR  -> nothing is edited, the flow stays red, a human triages A/B/C/D (docs §9.1).
+  - UI_CHANGE                    -> the patch must pass the code gate (no assertion changed, no check removed, no new file,
+                                    no `known-bug` tag, no `optional: true`) AND the replay must pass `bin/qa`.
+  - `if not replay_passed: approved = False` — the replay's exit code decides, whatever the agent claimed.
+
+Ceilings: 2 attempts per flow, 5 flows per run, 4 USD and 20 minutes per agent call. Verified repairs are committed on
+branch qa/repair-<timestamp>, together with the Stage 8 report, and opened as a PR. Nothing is merged; the PR is a draft
+unless the final full-suite run is green. No repair -> no PR, exit 1, the report stays in .qa-work/repair/.
+"""
+import argparse
+import fcntl
+import json
+import re
+import sys
+import time
+import xml.etree.ElementTree as ET
+from collections import Counter
+from pathlib import Path
+
+from qa_common import load_qa_auto
+
+qa = load_qa_auto()
+ROOT = qa.ROOT
+MAX_REPAIR_ATTEMPTS = 2
+qa.STAGE_TIMEOUT["repair"] = 20 * 60
+qa.STAGE_BUDGET_USD["repair"] = 4.0
+DIAGNOSIS = re.compile(r"^DIAGNOSIS:\s*(UI_CHANGE|APP_BUG_SUSPECTED|UNCLEAR)\b", re.M)
+EVIDENCE = re.compile(r"^EVIDENCE:\s*(.+)$", re.M)
+OPTIONAL = re.compile(r"optional:\s*true", re.I)
+ASSERT_START = re.compile(r"^(\s*)-\s*assert\w*", re.I)
+
+
+def log(msg):
+    qa.log(f"repair: {msg}")
+
+
+# ---------- the code gate (what makes a patch acceptable, independent of what the agent says) ----------
+
+def assertion_blocks(text, ignore_id=False):
+    """Every `- assert*` command with its indented body, normalised. A changed `text:`/`enabled:` value, a removed or
+    added assertion all change this multiset. (qa-auto's assert_lines only sees the first line of each block.)"""
+    lines, blocks, i = text.splitlines(), [], 0
+    while i < len(lines):
+        m = ASSERT_START.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        indent, body, i = len(m.group(1)), [lines[i].strip()], i + 1
+        while i < len(lines) and lines[i].strip() and len(lines[i]) - len(lines[i].lstrip()) > indent:
+            if not (ignore_id and lines[i].strip().startswith("id:")):
+                body.append(lines[i].strip())
+            i += 1
+        blocks.append(" ".join(body))
+    return Counter(blocks)
+
+
+def changed_files(wt):
+    tracked = qa.sh(["git", "diff", "--name-only"], cwd=wt).stdout.split()
+    untracked = qa.sh(["git", "ls-files", "--others", "--exclude-standard", "--", "apps"], cwd=wt).stdout.split()
+    return tracked, untracked
+
+
+def repair_gate(wt, app, flow_file, allow_assert_selector=False):
+    """(ok, reason, notes). A repair may edit the failing flow, or a shared subflow it calls — nothing else."""
+    tracked, untracked = changed_files(wt)
+    if untracked:
+        return False, f"new files created: {untracked}", []
+    if not tracked:
+        return False, "no change", []
+    notes = []
+    for f in tracked:
+        in_tests = f.startswith(f"apps/{app}/tests/") and f.endswith(".yaml")
+        in_shared = f.startswith(f"apps/{app}/shared/") and f.endswith(".yaml")
+        if not (in_tests or in_shared):
+            return False, f"touched forbidden file {f}", []
+        if in_tests and f != flow_file:
+            return False, f"edited another flow ({f}); a repair may change the failing flow or a shared subflow only", []
+        old, new = qa.sh(["git", "show", f"HEAD:{f}"], cwd=wt).stdout, (wt / f).read_text()
+        if assertion_blocks(old) != assertion_blocks(new):
+            if allow_assert_selector and assertion_blocks(old, True) == assertion_blocks(new, True):
+                notes.append(f"{f}: assertion selector (`id:`) changed — verify it still checks the same element")
+            else:
+                return False, f"{f}: assertion changed, removed or added", []
+        if len(OPTIONAL.findall(new)) > len(OPTIONAL.findall(old)):
+            return False, f"{f}: added `optional: true`", []
+    tagged = qa.new_known_bug_tags(wt, app)
+    if tagged:
+        return False, f"added the known-bug tag (only a human may, after filing a bug ticket): {tagged}", []
+    return True, "", notes
+
+
+# ---------- running the suite and reading its structured result ----------
+
+def revert(wt):
+    qa.sh(["git", "checkout", "--", "apps"], cwd=wt)
+    qa.sh(["git", "clean", "-fdq", "--", "apps"], cwd=wt)  # scoped to apps/: the QA's other files are never touched
+
+
+def run_suite(wt, app, udid, module=""):
+    """(exit_code, output). The verdict is bin/qa's exit code and nothing else."""
+    cmd = ["bin/qa", "run", app, "--exclude-tags", "known-bug", "--no-install", "--device", udid]
+    if module:
+        cmd += ["--module", module]
+    r = qa.sh(cmd, cwd=wt, check=False, timeout=45 * 60)
+    return r.returncode, (r.stdout + r.stderr)[-3000:]
+
+
+def failures_from_report(wt, app, rid):
+    """Structured failing-flow records from the JUnit report plus Maestro's debug output (screenshot, failed command)."""
+    report = wt / ".qa-work" / app / "report.xml"
+    debug = wt / ".qa-work" / app / "debug"
+    out = []
+    if not report.exists():
+        return out
+    for case in ET.parse(report).getroot().iter("testcase"):
+        bad = case.find("failure") if case.find("failure") is not None else case.find("error")
+        if bad is None:
+            continue
+        fid = case.get("id") or case.get("name")
+        rec = {"flow": fid, "requirement_id": fid, "file": case.get("file"),
+               "message": " ".join(((bad.text or bad.get("message") or "(no message)").strip()).split())[:600],
+               "artifacts": [], "failed_command": None}
+        for d in (debug.glob(f"**/{fid}") if debug.exists() else []):
+            if not d.is_dir():
+                continue
+            for sub in ("screenshots", "screen-hierarchy"):  # never logs/: huge and not needed
+                rec["artifacts"] += sorted(str(p.relative_to(wt)) for p in (d / sub).glob("*") if p.is_file())
+            try:
+                for c in json.loads((d / "commands.json").read_text()):
+                    if c.get("metadata", {}).get("status") == "FAILED":
+                        rec["failed_command"] = {"command": next(iter(c["command"]), "?"),
+                                                 "error": (c["metadata"].get("error") or {}).get("message", "")[:300]}
+            except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+                pass
+        out.append(rec)
+    d = wt / ".qa-work" / "repair"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{rid}-failures.json").write_text(json.dumps(out, indent=2))
+    return out
+
+
+def flow_path(wt, rec):
+    f = rec.get("file")
+    if f:
+        p = Path(f)
+        rel = p if not p.is_absolute() else p.relative_to(wt)
+        if (wt / rel).exists():
+            return str(rel)
+    hit = next((str(p.relative_to(wt)) for p in (wt / "apps").glob(f"**/{rec['flow']}.yaml")), None)
+    return hit
+
+
+# ---------- one flow: diagnose -> gate -> replay ----------
+
+def repair_one(rid, app, wt, udid, rec, args):
+    path = flow_path(wt, rec)
+    out = {"flow": rec["flow"], "file": path, "outcome": "NOT_ATTEMPTED", "diagnosis": None, "evidence": "",
+           "attempts": 0, "notes": [], "commit": None}
+    if not path:
+        out["outcome"] = "FLOW_FILE_NOT_FOUND"
+        return out
+    prior = ""
+    for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
+        out["attempts"] = attempt
+        prompt = (f"Stage 7 repair for flow {rec['flow']} (app {app}), attempt {attempt}/{MAX_REPAIR_ATTEMPTS}.\n"
+                  f"Use ONLY the simulator with device_id {udid} (the build under test is installed on it).\n\n"
+                  f"Structured failure:\n{json.dumps(rec, indent=2)}\n\n"
+                  f"Current flow ({path}):\n```yaml\n{(wt / path).read_text()}\n```\n"
+                  + (f"\nYour previous attempt was rejected: {prior}\n" if prior else ""))
+        res = qa.claude("repair", rid, app, wt, prompt, agent="repair-agent",
+                        tools=qa.BASE_TOOLS + [f"Edit(apps/{app}/tests/**)", f"Edit(apps/{app}/shared/**)",
+                                               "mcp__maestro__list_devices", "mcp__maestro__inspect_screen",
+                                               "mcp__maestro__take_screenshot", "mcp__maestro__run"])
+        reply = res.get("result") or ""
+        m, e = DIAGNOSIS.search(reply), EVIDENCE.search(reply)
+        out["diagnosis"] = m.group(1) if m else "UNPARSEABLE"
+        ev = e.group(1).strip() if e else " ".join(reply.split())
+        out["evidence"] = ev if len(ev) <= 500 else ev[:497] + "..."
+        if out["diagnosis"] != "UI_CHANGE":
+            revert(wt)  # nothing may be edited unless the agent can show the UI changed
+            out["outcome"] = {"APP_BUG_SUSPECTED": "ESCALATED_APP_BUG_SUSPECTED", "UNCLEAR": "ESCALATED_UNCLEAR"}.get(
+                out["diagnosis"], "ESCALATED_UNPARSEABLE")
+            return out
+        ok, why, notes = repair_gate(wt, app, path, args.allow_assert_selector)
+        if not ok:
+            revert(wt)
+            out["outcome"] = "NO_CHANGE" if why == "no change" else "REJECTED_BY_GATE"
+            out["evidence"] += f" | gate: {why}"
+            return out  # an agent that tried to cheat the gate is not given a second go
+        tracked, _ = changed_files(wt)
+        approved = True
+        replay_mod = "" if any("/shared/" in f for f in tracked) else "/".join(Path(path).parts[3:5])
+        replay_rc, replay_tail = run_suite(wt, app, udid, replay_mod)
+        replay_passed = replay_rc == 0
+        # even if the agent reports success, the gate below is what actually decides
+        if not replay_passed:
+            approved = False
+        if approved:
+            qa.commit(wt, f"repair: {rec['flow']} — UI selector/timing changed (attempt {attempt})\n\nRepair run: {rid}")
+            out["commit"] = qa.sh(["git", "rev-parse", "--short", "HEAD"], cwd=wt).stdout.strip()
+            out["outcome"], out["notes"] = "REPAIRED", notes
+            return out
+        revert(wt)
+        prior = f"replay still red after your patch (runner exit {replay_rc}). Tail:\n{replay_tail[-1200:]}"
+        out["outcome"] = "REPLAY_RED"
+    return out
+
+
+# ---------- Stage 8 report for a repair run ----------
+
+def render_report(rid, app, results, baseline, final, models, cost, status, pr_url=None):
+    L = [f"# Repair run {rid} — {app}", "",
+         f"Generated {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} by `bin/qa-repair` (code; the replay's exit code is the verdict).", "",
+         "## Result", "",
+         f"- Failing flows at start: **{len(baseline)}** · repaired: **{sum(r['outcome'] == 'REPAIRED' for r in results)}** · "
+         f"escalated to a human: **{sum(r['outcome'].startswith(('ESCALATED', 'REJECTED', 'REPLAY', 'NO_CHANGE', 'FLOW')) for r in results)}**"
+         f" · not attempted (cap): **{sum(r['outcome'] == 'NOT_ATTEMPTED' for r in results)}**",
+         f"- Final full-suite run after the repairs: {final}",
+         f"- PR status: {status}" + (f" — {pr_url}" if pr_url else ""),
+         f"- Models: {models} · cost: ${cost:.2f} · ceilings: {MAX_REPAIR_ATTEMPTS} attempts per flow",
+         "", "## Per flow", "",
+         "| Flow | Outcome | Diagnosis | Attempts | Evidence (agent's words — verified only by the gate and the replay) |", "|---|---|---|---|---|"]
+    for r in results:
+        L.append(f"| `{r['flow']}` | **{r['outcome']}** | {r['diagnosis'] or '-'} | {r['attempts']} | {qa_esc(r['evidence'])} |")
+    notes = [n for r in results for n in r["notes"]]
+    if notes:
+        L += ["", "## Reviewer must check", ""] + [f"- {n}" for n in notes]
+    L += ["", "## What a human does next", "",
+          "- `REPAIRED`: review the diff — the PR must show only selector/timing changes and no changed assertion.",
+          "- `ESCALATED_*` / `REJECTED_BY_GATE` / `REPLAY_RED`: the flow stays red. Triage per docs/huong-dan-qa-pipeline.md §9.1 "
+          "(A app bug → bug ticket · B ticket wrong · C AI misread → spec PR with reason · D requirement changed → new ticket). "
+          "Do not edit the spec or an assertion to make it pass."]
+    return "\n".join(L) + "\n"
+
+
+def qa_esc(s):
+    return str(s).replace("|", "\\|").replace("\n", " ")
+
+
+# ---------- driver ----------
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("app")
+    ap.add_argument("--module", default="")
+    ap.add_argument("--max-flows", type=int, default=5)
+    ap.add_argument("--allow-assert-selector", action="store_true",
+                    help="accept a changed `id:` inside an assertion (text/value must be identical); listed for the reviewer, PR stays draft")
+    ap.add_argument("--dry-run", action="store_true", help="run the suite and write the structured failures; no agent, no edits")
+    args = ap.parse_args()
+    if not (ROOT / "apps" / args.app / "app.config.yml").exists():
+        sys.exit(f"qa-repair: no apps/{args.app}")
+    rid = "REPAIR-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    qa.AUTO.mkdir(parents=True, exist_ok=True)
+    lock = open(qa.AUTO / "lock", "w")  # one simulator, one driver — shares qa-auto's lock
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit("qa-repair: qa-auto (or another qa-repair) is running")
+
+    qa.load_test_account(args.app)
+    wt = qa.ensure_branch(rid.lower())  # branch qa/repair-<timestamp> from origin/main
+    branch = qa.current_branch()
+    code = 1
+    try:
+        code = run(args, rid, wt, branch)
+    finally:
+        qa.drop_simulator()
+        if qa.sh(["git", "rev-list", "--count", f"origin/main..{branch}"], cwd=ROOT, check=False).stdout.strip() in ("0", ""):
+            qa.sh(["git", "switch", "main"], cwd=ROOT, check=False)
+            qa.sh(["git", "branch", "-D", branch], cwd=ROOT, check=False)  # an empty branch is not worth keeping
+    sys.exit(code)
+
+
+def run(args, rid, wt, branch):
+    """Returns the exit code: 0 = suite green or every failing flow repaired, 1 = something is still red."""
+    udid = qa.fresh_simulator(args.app, wt)
+    rc, tail = run_suite(wt, args.app, udid, args.module)
+    if rc == 0:
+        log("suite is green — nothing to repair")
+        return 0
+    if qa.INFRA_ERR.search(tail):
+        log("device/driver error, not a flow failure — retry on a fresh simulator\n" + tail[-800:])
+        return 1
+    baseline = failures_from_report(wt, args.app, rid)
+    log(f"{len(baseline)} failing flow(s): {', '.join(b['flow'] for b in baseline)}")
+    if args.dry_run or not baseline:
+        print(json.dumps(baseline, indent=2))
+        return 1
+    results = [repair_one(rid, args.app, wt, udid, rec, args) for rec in baseline[:args.max_flows]]
+    results += [{"flow": r["flow"], "file": None, "outcome": "NOT_ATTEMPTED", "diagnosis": None, "evidence": "over --max-flows",
+                 "attempts": 0, "notes": [], "commit": None} for r in baseline[args.max_flows:]]
+    repaired = [r for r in results if r["outcome"] == "REPAIRED"]
+    total, recs = qa.total_cost(rid)
+    models = qa.models_line(recs)
+    final = "not run (no repair)"
+    if repaired:
+        frc, _ = run_suite(wt, args.app, udid, args.module)
+        final = "GREEN" if frc == 0 else "RED (other flows still failing, or a repair broke something)"
+    status = "none"
+    if repaired:
+        status = "ready for review" if final == "GREEN" and not any(r["notes"] for r in results) else "draft"
+    report = render_report(rid, args.app, results, baseline, final, models, total, status)
+    if not repaired:
+        f = wt / ".qa-work" / "repair" / f"{rid}.md"
+        f.write_text(report)
+        log(f"no flow was repaired — still red. Triage report: {f.relative_to(wt)}")
+        print(report)
+        return 1
+    rep = wt / "apps" / args.app / "reports" / "repair" / f"run-{rid.split('-', 1)[1]}.md"
+    rep.parent.mkdir(parents=True, exist_ok=True)
+    rep.write_text(report)
+    qa.commit(wt, f"{rid}: Stage 8 report\n\nRepair run: {rid}")
+    qa.sh(["git", "push", "-u", "origin", branch, "--force-with-lease"], cwd=wt)
+    body = report + ("\n### Reviewer checklist\n- [ ] The diff changes only selectors/timing — no assertion, spec or CASES.md\n"
+                    "- [ ] Each REPAIRED flow's evidence matches the real UI change\n"
+                    "- [ ] Unrepaired flows are triaged A/B/C/D, not patched\n\n"
+                    "🤖 Generated with [Claude Code](https://claude.com/claude-code)\n")
+    cmd = ["gh", "pr", "create", "--base", "main", "--head", branch, "--title",
+           f"repair: {len(repaired)} flow(s) after UI change ({args.app}, {status})", "--body", body]
+    if status != "ready for review":
+        cmd.append("--draft")
+    url = qa.sh(cmd, cwd=wt).stdout.strip().splitlines()[-1]
+    log(f"PR {url} ({status}), cost ${total:.2f}")
+    return 0 if all(r["outcome"] == "REPAIRED" for r in results) else 1
+
+
+if __name__ == "__main__":
+    main()

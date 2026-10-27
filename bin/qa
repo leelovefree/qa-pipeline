@@ -142,6 +142,30 @@ require_flow_vars() {
   [ -z "$missing" ] || die "flows need${missing} — set them in ~/.config/qa/$APP.env (or the environment). See apps/$APP/shared/"
 }
 
+# Maestro's debug output records every flow variable in plain text (commands.json). Replace the value of each
+# MAESTRO_QA_* variable with *** in the text files before anybody — a CI artifact, a repair agent — can read them.
+# Screenshots are images and cannot be scrubbed: they show whatever the app showed.
+redact_debug() {
+  [ -d "$1" ] || return 0
+  python3 - "$1" <<'PY' || log "warning: could not redact $1 — do not share it"
+import os, sys
+vals = sorted({v for k, v in os.environ.items() if k.startswith("MAESTRO_QA_") and len(v) >= 3}, key=len, reverse=True)
+for d, _, files in os.walk(sys.argv[1]):
+    for f in files:
+        if not vals or not f.endswith((".json", ".log", ".txt", ".xml")):
+            continue
+        p = os.path.join(d, f)
+        with open(p, encoding="utf-8", errors="surrogateescape") as fh:
+            text = fh.read()
+        new = text
+        for v in vals:
+            new = new.replace(v, "***")
+        if new != text:
+            with open(p, "w", encoding="utf-8", errors="surrogateescape") as fh:
+                fh.write(new)
+PY
+}
+
 do_install() {
   local ref app_path actual
   ref="${BUILD:-$(cfg build)}"
@@ -168,8 +192,13 @@ do_run() {
   [ -z "$EXCLUDE_TAGS" ] || { args+=(--exclude-tags "$EXCLUDE_TAGS"); log "excluding flows tagged: $EXCLUDE_TAGS"; }
   log "running ${#flows[@]} flow(s) from ${dir#$ROOT/} on $UDID"
   mkdir -p "$WORK/$APP"
+  # Failure evidence (screenshot + view hierarchy + failed command per flow) goes to .qa-work/<app>/debug, which CI uploads.
+  local debug="$WORK/$APP/debug" rc=0
+  rm -rf "$debug"
   maestro --device "$UDID" test ${args[@]+"${args[@]}"} \
-    --format junit --output "$WORK/$APP/report.xml" "${flows[@]}"
+    --format junit --output "$WORK/$APP/report.xml" --debug-output "$debug" --flatten-debug-output "${flows[@]}" || rc=$?
+  redact_debug "$debug"
+  return "$rc"  # Maestro's own exit code, unchanged
 }
 
 CMD="${1:-}"; [ $# -gt 0 ] && shift
