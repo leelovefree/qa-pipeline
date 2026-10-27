@@ -70,6 +70,17 @@ def load_env():
         sys.exit(f"qa-auto: missing {', '.join(missing)} (put them in ~/.config/qa-auto/env, chmod 600)")
 
 
+def load_test_account(app):
+    """Export the app's MAESTRO_* test-account variables (~/.config/qa/<app>.env) so the claude sessions and bin/qa see
+    them. Values are never put in a prompt, a log or a file in the repo."""
+    f = Path(os.environ.get("QA_ENV_FILE") or Path.home() / ".config" / "qa" / f"{app}.env")
+    if f.exists():
+        for line in f.read_text().splitlines():
+            k, _, v = line.partition("=")
+            if re.fullmatch(r"MAESTRO_[A-Z0-9_]+", k.strip()):
+                os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
+
 def app_config(app):
     cfg = {}
     for line in (ROOT / "apps" / app / "app.config.yml").read_text().splitlines():
@@ -607,6 +618,7 @@ def stage_build(key, app):
 
 def _stage_build(key, app):
     wt = ensure_branch(key)
+    load_test_account(app)
     udid = fresh_simulator(app, wt)
 
     writer_summary = "(Stage 3/4 output already on the branch from an earlier run; not regenerated.)"
@@ -619,6 +631,8 @@ def _stage_build(key, app):
                   f"the build is already installed on it. Keep every hard guardrail (inspect_screen before "
                   f"selectors, 15 actions / 5 rounds per case). "
                   f"If a case cannot be automated within the ceiling, skip its flow and say so in your final message. "
+                  f"Log in with the shared subflow apps/{app}/shared/login.yaml; the test account is in the MAESTRO_QA_* environment "
+                  f"variables — never write or print its values. "
                   f"Never add a `known-bug` tag or a `# Known-bug:` header: only a human may, after filing a bug ticket. "
                   f"If a flow fails because the app seems to differ from the spec, leave the flow as written and report it. "
                   f"Run `bin/qa-check {app}` before finishing. Do not run the test suite — the runner does that.")

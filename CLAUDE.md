@@ -16,6 +16,7 @@ bin/qa-auto                 unattended driver: Jira label `qa-auto` → spec →
   app-<app>.yml            WHEN to test one app (dispatch from app repo, PRs, nightly, manual)
 apps/<app>/
   app.config.yml           app_id, platform, build source, tracker
+  shared/                  subflows (login) — outside tests/, so bin/qa never runs them as tests
   specs/<TICKET-ID>/       Stage 2 output
   tests/<module>/<feature>/ CASES.md + <REQUIREMENT_ID>.yaml (Stages 3/4)
   reports/                 Stage 8 output (not built yet)
@@ -66,4 +67,6 @@ if (!replay.passed) review.approved = false;
 - Everything for one app stays inside `apps/<app>/`. Framework changes (`bin/`, `.github/`, `.claude/`)
   affect every app — their PRs run every app's suite.
 - One Claude Code session per pipeline stage. Do not run Stage 2 through Stage 4 in one continuous chat.
-- Test accounts and tokens go in CI secrets, never in the repo. No real customer/rider data.
+- Test accounts and tokens go in CI secrets, never in the repo. No real customer/rider data. Flows never contain
+  credentials: they call `apps/<app>/shared/login.yaml` (outside `tests/`, so it is not run as a test) and read
+  `${MAESTRO_QA_EMAIL}` / `${MAESTRO_QA_PASSWORD}`. Locally `bin/qa` loads them from `~/.config/qa/<app>.env`.

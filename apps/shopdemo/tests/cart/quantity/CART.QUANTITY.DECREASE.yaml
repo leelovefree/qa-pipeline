@@ -6,19 +6,7 @@ appId: com.qademo.iosshopdemo
 ---
 - launchApp:
     clearState: true
-- tapOn:
-    id: login_email_field
-- inputText: demo@shop.com
-- tapOn:
-    id: login_password_field
-- inputText: "123456"
-- tapOn:
-    id: login_submit_button
-- runFlow:
-    when:
-      visible: "Not Now"
-    commands:
-      - tapOn: "Not Now"
+- runFlow: ../../../shared/login.yaml
 - assertVisible:
     id: home_screen
 # Step 1: add with quantity 3

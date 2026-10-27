@@ -233,6 +233,17 @@ gh secret set QA_DISPATCH_TOKEN -R <org>/<app-repo>      # repo app báo cho rep
 
 (`gh secret set` sẽ hỏi giá trị, nên không cần dán token vào đâu khác. Không bao giờ commit token vào repo.)
 
+**Tài khoản test của app** cũng là secret, không ghi vào flow. Flow đọc chúng qua biến `${MAESTRO_QA_EMAIL}` / `${MAESTRO_QA_PASSWORD}`
+và đăng nhập bằng subflow dùng chung `apps/<app>/shared/login.yaml` (nằm ngoài `tests/` nên `bin/qa` không chạy nó như một test):
+
+```bash
+gh secret set QA_TEST_EMAIL    -R <org>/qa-pipeline     # CI: regression.yml map sang MAESTRO_QA_EMAIL
+gh secret set QA_TEST_PASSWORD -R <org>/qa-pipeline     # CI: regression.yml map sang MAESTRO_QA_PASSWORD
+```
+
+Chạy local: tạo `~/.config/qa/<app>.env` (chmod 600, ngoài repo) với 2 dòng `MAESTRO_QA_EMAIL=...` và `MAESTRO_QA_PASSWORD=...`.
+`bin/qa` đọc file này (chỉ các biến `MAESTRO_*`, không `source`) và dừng ngay nếu flow cần biến mà chưa có.
+
 ### 4.5 Kiểm tra
 
 ```bash

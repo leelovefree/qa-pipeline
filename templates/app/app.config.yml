@@ -13,5 +13,8 @@ build: gh-release:<owner>/<repo>@latest/<App>.app.zip
 
 ios_device: iPhone 16              # simulator booted when none is running
 
+# Test-account credentials are NOT configured here. Flows log in through apps/<app>/shared/login.yaml and read
+# ${MAESTRO_QA_EMAIL} / ${MAESTRO_QA_PASSWORD} from ~/.config/qa/<app>.env (local) or CI secrets QA_TEST_EMAIL / QA_TEST_PASSWORD.
+
 tracker_mcp_server: <mcp-server>   # MCP server used for tickets in this Claude Code setup
 tracker_project_key: <KEY>

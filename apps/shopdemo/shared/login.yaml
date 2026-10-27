@@ -1,0 +1,20 @@
+# Shared subflow: log in with the QA test account and dismiss iOS's "Save Password?" sheet.
+# Not a test — it lives outside tests/ so bin/qa never runs it on its own. Call it from a flow:
+#   - runFlow: ../../../shared/login.yaml        # flows sit in tests/<module>/<feature>/
+# Credentials come from the MAESTRO_QA_EMAIL / MAESTRO_QA_PASSWORD environment variables
+# (local: ~/.config/qa/shopdemo.env, CI: repository secrets) — never write them into a flow.
+appId: com.qademo.iosshopdemo
+---
+- tapOn:
+    id: login_email_field
+- inputText: ${MAESTRO_QA_EMAIL}
+- tapOn:
+    id: login_password_field
+- inputText: ${MAESTRO_QA_PASSWORD}
+- tapOn:
+    id: login_submit_button
+- runFlow:
+    when:
+      visible: "Not Now"
+    commands:
+      - tapOn: "Not Now"

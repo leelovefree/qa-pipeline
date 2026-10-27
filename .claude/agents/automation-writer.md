@@ -41,6 +41,11 @@ tags:        # only for a happy-path case (the main success flow of a feature) â
 ```
 Tag `smoke` sparingly: one or two per module, only the core success path. Edge/negative cases stay untagged
 (they run in the nightly full run). Never add `smoke` or remove a tag to change a test's outcome.
+Credentials never go into a flow. Log in with `- runFlow: ../../../shared/login.yaml` (flows live in
+`tests/<module>/<feature>/`), which reads `${MAESTRO_QA_EMAIL}` / `${MAESTRO_QA_PASSWORD}` from the environment; if a
+case needs the typed values themselves, reference those variables, never the literals. Never print them. For a case that
+tests the login screen itself, type the same variables inline instead of using the subflow. If `apps/<app>/shared/login.yaml`
+does not exist yet, create it (outside `tests/`) after observing the login screen.
 Before handing over, run the new flows once for real: `bin/qa run <app> --module <module> --no-install`
 and report the actual result.
 
