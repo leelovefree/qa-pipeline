@@ -164,7 +164,7 @@ Ví dụ: bạn tự làm tay `/spec` và `/cases`, rồi muốn AI lo phần c�
 
 - **Xanh chưa có nghĩa là test đúng.** Bạn là người kiểm cuối: assertion có khớp expected result của spec không? Tool chưa có cổng chất lượng assertion bằng code.
 - Có thể **trùng test cũ** (SCRUM-8 sinh `INCREASE_ONE_TO_TWO` dù `INCREASE` đã phủ). Tool chưa so với test có sẵn; `/cases` có nhắc AI báo trùng nhưng chưa được kiểm chứng.
-- Flow hiện **hard-code tài khoản demo** (không nên với dữ liệu thật; theo CLAUDE.md tài khoản test phải nằm ở CI secrets).
+- Tài khoản test **không nằm trong flow**: flow gọi `apps/<app>/shared/login.yaml` và đọc `${MAESTRO_QA_EMAIL}` / `${MAESTRO_QA_PASSWORD}` từ `~/.config/qa/<app>.env` (local) hoặc secret `QA_TEST_EMAIL` / `QA_TEST_PASSWORD` (CI). Chưa kiểm chứng: Maestro MCP của `automation-writer` có thấy các biến này khi `qa-auto` sinh flow mới hay không.
 - Chưa kiểm chứng thật: nhánh ticket mơ hồ (hỏi lại → trả lời → resume), `flow-fixer` sửa selector thật, PR draft đỏ, chốt chặn `known-bug` (mới chỉ test từng hàm, AI chưa từng thử gắn tag).
 - Muốn đánh dấu một test đỏ là bug thật của app: bạn tạo bug ticket rồi tự thêm `tags: [known-bug]` và dòng `# Known-bug: KEY-123` vào flow (qua PR). AI không được làm việc này.
 - Chi phí: `claude -p` dùng hạn mức Claude của chính tài khoản bạn.

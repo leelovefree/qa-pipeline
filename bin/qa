@@ -115,6 +115,33 @@ ios_udid() {
   printf '%s' "$udid"
 }
 
+# Test-account credentials live outside the repo. Flows read them as ${MAESTRO_<NAME>} (Maestro passes every
+# MAESTRO_* shell variable into the flow). Locally they come from ~/.config/qa/<app>.env (KEY=VALUE lines,
+# chmod 600; override the path with QA_ENV_FILE); in CI the workflow exports them from repository secrets.
+# The file is parsed, never sourced, and a variable that is already set wins.
+load_credentials() {
+  local file="${QA_ENV_FILE:-$HOME/.config/qa/$APP.env}" line k v
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    k="${line%%=*}"; v="${line#*=}"
+    k="${k#"${k%%[![:space:]]*}"}"; k="${k%"${k##*[![:space:]]}"}"
+    v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
+    case "$v" in \"*\") v="${v#\"}"; v="${v%\"}" ;; \'*\') v="${v#\'}"; v="${v%\'}" ;; esac
+    printf '%s' "$k" | grep -qE '^MAESTRO_[A-Z0-9_]+$' || continue
+    [ -n "${!k:-}" ] || export "$k=$v"
+  done < "$file"
+}
+
+# Fail before installing or booting anything if a flow needs a variable nobody provided.
+require_flow_vars() {
+  local name missing=""
+  for name in $(grep -rhoE '\$\{MAESTRO_[A-Z0-9_]+\}' "$ROOT/apps/$APP/tests" "$ROOT/apps/$APP/shared" 2>/dev/null | tr -d '${}' | sort -u); do
+    [ -n "${!name:-}" ] || missing="$missing $name"
+  done
+  [ -z "$missing" ] || die "flows need${missing} — set them in ~/.config/qa/$APP.env (or the environment). See apps/$APP/shared/"
+}
+
 do_install() {
   local ref app_path actual
   ref="${BUILD:-$(cfg build)}"
@@ -175,5 +202,7 @@ PLATFORM=$(cfg platform); APP_ID=$(cfg app_id)
 [ "$PLATFORM" = ios ] || die "platform '$PLATFORM': only ios is implemented"
 
 if [ "$CMD" = install ]; then do_install; exit 0; fi
+load_credentials
+require_flow_vars
 if [ -n "$NO_INSTALL" ]; then UDID=$(ios_udid); else do_install; fi
 do_run

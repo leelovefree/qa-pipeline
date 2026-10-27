@@ -34,6 +34,12 @@ on:
       QA_BUILDS_TOKEN:
         description: "Token that can read the app repo's releases (gh-release builds) or bearer token for URLs."
         required: false
+      QA_TEST_EMAIL:
+        description: "Test-account email the flows read as MAESTRO_QA_EMAIL (never written into a flow)."
+        required: false
+      QA_TEST_PASSWORD:
+        description: "Test-account password the flows read as MAESTRO_QA_PASSWORD."
+        required: false
 
 jobs:
   regression:
@@ -53,6 +59,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.QA_BUILDS_TOKEN }}
           QA_BUILD_TOKEN: ${{ secrets.QA_BUILDS_TOKEN }}
+          MAESTRO_QA_EMAIL: ${{ secrets.QA_TEST_EMAIL }}
+          MAESTRO_QA_PASSWORD: ${{ secrets.QA_TEST_PASSWORD }}
           APP: ${{ inputs.app }}
           BUILD: ${{ inputs.build }}
           MODULE: ${{ inputs.module }}
