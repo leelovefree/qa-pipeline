@@ -195,7 +195,7 @@ def claude(stage, key, app, cwd, prompt, agent=None, model=None, tools=()):
         out = json.loads(r.stdout)
     except json.JSONDecodeError:
         out = {"result": r.stdout[-1500:], "is_error": True}
-    rec = {"ticket": key, "stage": stage, "agent": agent, "model_requested": model or "agent-default",
+    rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "ticket": key, "stage": stage, "agent": agent, "model_requested": model or "agent-default",
            "models": model_usage(out),
            "session_id": out.get("session_id"), "cost_usd": out.get("total_cost_usd"),
            "seconds": round(time.time() - t0), "is_error": bool(out.get("is_error")) or r.returncode != 0}
@@ -522,15 +522,15 @@ def fresh_simulator(app, wt):
     return udid
 
 
-def run_tests_resilient(wt, app, mods):
+def run_tests_resilient(wt, app, mods, key=None):
     """run_tests, but a device/driver failure restarts the simulator and re-runs ONCE (hard ceiling).
     The verdict is still only the exit code of bin/qa — a restart can fix the environment, never the result."""
     fresh_simulator(app, wt)
-    passed, tail = run_tests(wt, app, mods)
+    passed, tail = run_tests(wt, app, mods, key)
     if not passed and INFRA_ERR.search(tail):
         log("device/driver error (not a flow failure) → new simulator and re-running once")
         fresh_simulator(app, wt)
-        passed, tail = run_tests(wt, app, mods)
+        passed, tail = run_tests(wt, app, mods, key)
         tail = "(first run hit a device/driver error; new simulator created and the flows re-run once)\n" + tail
     return passed, tail
 
@@ -552,7 +552,26 @@ def failure_reasons(wt, app, since):
     return "Failure reasons (from report.xml):\n" + "\n".join(out) + "\n" if out else ""
 
 
-def run_tests(wt, app, mods):
+def record_results(key, app, wt, since):
+    """Append each flow's verdict from the JUnit report bin/qa wrote (the runner's own result) to results.jsonl,
+    so the Stage 8 report can show a verdict per rule. Never raises: auditing must not break a run."""
+    report = wt / ".qa-work" / app / "report.xml"
+    try:
+        if not key or not report.exists() or report.stat().st_mtime < since:
+            return
+        d = AUTO / key
+        d.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with open(d / "results.jsonl", "a") as f:
+            for case in ET.parse(report).getroot().iter("testcase"):
+                bad = case.find("failure") if case.find("failure") is not None else case.find("error")
+                f.write(json.dumps({"ts": ts, "flow": case.get("id") or case.get("name"),
+                                    "status": "failed" if bad is not None else "passed"}) + "\n")
+    except (ET.ParseError, OSError):
+        pass
+
+
+def run_tests(wt, app, mods, key=None):
     """Returns (passed, output_tail). Verdict = bin/qa exit code only."""
     tail = []
     for m in mods:
@@ -560,6 +579,7 @@ def run_tests(wt, app, mods):
         t0 = time.time() - 2
         r = sh(["bin/qa", "run", app, "--module", m, "--exclude-tags", "known-bug", "--no-install", "--device", sim_udid()],
                cwd=wt, check=False, timeout=30 * 60)
+        record_results(key, app, wt, t0)
         reasons = failure_reasons(wt, app, t0) if r.returncode else ""
         tail.append(f"## module {m} exit={r.returncode}\n{reasons}{(r.stdout + r.stderr)[-3000:]}")
         if r.returncode != 0:
@@ -659,7 +679,7 @@ def _stage_build(key, app):
     if not mods:
         return fail(key, app, f"Stage 4 produced no flow for any rule (missing: {', '.join(missing) or 'n/a'})")
 
-    passed, tail = run_tests_resilient(wt, app, mods)
+    passed, tail = run_tests_resilient(wt, app, mods, key)
     attempts = 0
     fix_note = ""
     possible_app_bug = False
@@ -693,7 +713,7 @@ def _stage_build(key, app):
             fix_note += f"- attempt {attempts}: REJECTED by integrity gate ({why}); reverted\n"
             break
         commit(wt, f"{key}: fix flow selectors/timing (attempt {attempts})\n\nTicket: {key}")
-        passed, tail = run_tests_resilient(wt, app, mods)
+        passed, tail = run_tests_resilient(wt, app, mods, key)
         fix_note += f"- attempt {attempts}: {'green' if passed else 'still red'}. Fixer said: {reply}\n"
 
     open_pr(key, app, wt, mods, passed, attempts, fix_note, writer_summary, tail, possible_app_bug, missing)
@@ -736,6 +756,19 @@ Models: {models} · Sessions: {', '.join(str(r['session_id']) for r in recs)} ·
     jira_labels(key, add=[L_PR_OPEN if status == "GREEN" else L_RED], remove=[L_REVIEW, L_APPROVED, L_ERROR])
     set_stage(key, app=app, stage="pr_open" if status == "GREEN" else "pr_red", pr=url, cost_usd=round(cost, 2))
     log(f"{key}: PR {url} ({status}), total cost ${cost:.2f}")
+    add_report(key, app, wt)
+
+
+def add_report(key, app, wt):
+    """Stage 8: write apps/<app>/reports/<KEY>/run-<ts>.md (code, no AI) and push it onto the PR. Best effort — an audit
+    report must never turn a finished run into an error."""
+    try:
+        path = sh([str(ROOT / "bin" / "qa-report"), key, "--app", app], cwd=wt).stdout.strip().splitlines()[-1]
+        if commit(wt, f"{key}: Stage 8 report\n\nTicket: {key}"):
+            sh(["git", "push", "origin", f"qa/{key}", "--force-with-lease"], cwd=wt)
+        log(f"{key}: report {path}")
+    except Exception as e:  # noqa: BLE001
+        log(f"{key}: could not write the Stage 8 report: {str(e)[:300]}")
 
 
 # ---------- driver ----------
@@ -813,4 +846,5 @@ def main():
             time.sleep(a.interval)
 
 
-main()
+if __name__ == "__main__":
+    main()

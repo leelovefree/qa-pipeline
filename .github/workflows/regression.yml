@@ -75,6 +75,18 @@ jobs:
           echo "Testing app=$APP build=${BUILD:-<from app.config.yml>}"
           bin/qa run "$APP" ${args[@]+"${args[@]}"}
 
+      - name: Upload failure evidence (screenshots, view hierarchy, failed command — secrets redacted)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-${{ inputs.app }}
+          path: |
+            .qa-work/${{ inputs.app }}/debug
+            !.qa-work/${{ inputs.app }}/debug/**/logs
+            !.qa-work/${{ inputs.app }}/debug/*.log
+          retention-days: 14
+          if-no-files-found: ignore
+
       - name: Upload JUnit report
         if: always()
         uses: actions/upload-artifact@v4

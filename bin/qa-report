@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""qa-report — Stage 8: audit report for one ticket, assembled by code (no AI call).
+
+  bin/qa-report <TICKET> [--app <app>] [--no-jira] [--no-github] [--stdout]
+
+Writes apps/<app>/reports/<TICKET>/run-<UTC timestamp>.md from: spec.md / CASES.md / flows (coverage), the runner's own
+verdicts (.qa-work/auto/<TICKET>/results.jsonl), per-step model/token/cost records (runs.jsonl), git history, the PR and
+the Jira label history (when to qa-approved was added). Git + Jira stay the audit trail; there is no separate database.
+Names are deliberately left out: who approved is one click away on the PR / ticket, the report needs only what and when.
+"""
+import argparse
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+from qa_common import load_qa_auto
+
+qa = load_qa_auto()
+ROOT = qa.ROOT
+
+
+def jsonl(path):
+    if not path.exists():
+        return []
+    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+
+
+def jira_ready():
+    try:
+        qa.load_env()
+        return True
+    except SystemExit:
+        return False
+
+
+def approval_events(key):
+    """[(ts, label)] each time the QA label was added to the ticket, from the Jira changelog."""
+    data = qa.jira("GET", f"/rest/api/3/issue/{key}?expand=changelog&fields=labels")
+    out = []
+    for h in data.get("changelog", {}).get("histories", []):
+        for it in h.get("items", []):
+            if it.get("field") != "labels":
+                continue
+            before, after = set((it.get("fromString") or "").split()), set((it.get("toString") or "").split())
+            for lab in sorted(after - before):
+                if lab in (qa.L_APPROVED, qa.L_REVIEW, qa.L_PR_OPEN, qa.L_RED, qa.L_NEEDS_INFO):
+                    out.append((h["created"], lab))
+    return sorted(out)
+
+
+def pr_info(key):
+    r = qa.sh(["gh", "pr", "list", "--head", f"qa/{key}", "--state", "all", "--json",
+               "url,number,state,isDraft,createdAt,mergedAt,reviews"], cwd=ROOT, check=False)
+    prs = json.loads(r.stdout or "[]") if r.returncode == 0 else []
+    return prs[0] if prs else None
+
+
+def commits(key):
+    ref = f"qa/{key}" if qa.branch_exists(f"qa/{key}") else "HEAD"
+    base = "origin/main" if qa.sh(["git", "rev-parse", "--verify", "-q", "origin/main"], cwd=ROOT, check=False).returncode == 0 else "main"
+    r = qa.sh(["git", "log", f"{base}..{ref}", "--format=%h\t%aI\t%s"], cwd=ROOT, check=False)
+    return [l.split("\t", 2) for l in r.stdout.splitlines() if l.count("\t") == 2]
+
+
+def esc(s):
+    return str(s).replace("|", "\\|").replace("\n", " ")
+
+
+def build_report(key, app, use_jira=True, use_github=True):
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    jira_ok = use_jira and jira_ready()
+    spec_dir = ROOT / "apps" / app / "specs" / key
+    spec_file = spec_dir / "spec.md"
+    if not spec_file.exists():
+        spec_text = qa.sh(["git", "show", f"qa/{key}:apps/{app}/specs/{key}/spec.md"], cwd=ROOT, check=False).stdout \
+            if qa.branch_exists(f"qa/{key}") else ""
+    else:
+        spec_text = spec_file.read_text()
+    ids = re.findall(r"^### (\S+)", spec_text, re.M)
+    cases = qa.case_blocks(ROOT, app)
+    flows = {f.stem: f for f in (ROOT / "apps" / app / "tests").glob("**/*.yaml")}
+    results = {}
+    for r in jsonl(qa.AUTO / key / "results.jsonl"):  # later records win: the last run of a flow is its verdict
+        results[r["flow"]] = r
+    runs = jsonl(qa.AUTO / key / "runs.jsonl")
+    state = qa.load_state().get(key, {})
+
+    covered = [i for i in ids if i in cases and i in flows]
+    L = [f"# {key} — pipeline run report", "",
+         f"Generated {now} by `bin/qa-report` (assembled by code from the run records, git, the PR and Jira; no AI call).", "",
+         "## Traceability", "",
+         f"- Ticket: {os.environ.get('JIRA_BASE_URL', '').rstrip('/') or '<jira>'}/browse/{key}",
+         f"- App: `{app}` · branch `qa/{key}`"]
+    pr = pr_info(key) if use_github else None
+    if pr:
+        L.append(f"- PR: {pr['url']} ({'draft' if pr.get('isDraft') else pr['state'].lower()}, opened {pr['createdAt']})")
+    elif state.get("pr"):
+        L.append(f"- PR: {state['pr']}")
+    else:
+        L.append("- PR: none yet")
+    cs = commits(key)
+    if cs:
+        L += ["- Commits on the branch:"] + [f"  - `{c[0]}` {c[1]} — {c[2]}" for c in cs]
+
+    L += ["", "## Rules covered", "",
+          f"**{len(covered)}/{len(ids)}** spec rules have both a test case and a flow.", "",
+          "| Rule | Case | Flow | Last local verdict (`bin/qa` result) |", "|---|---|---|---|"]
+    for i in ids:
+        v = results.get(i)
+        verdict = f"{v['status']} ({v['ts']})" if v else "not recorded"
+        L.append(f"| `{i}` | {'yes' if i in cases else '**missing**'} | {'yes' if i in flows else '**missing**'} | {verdict} |")
+    if not ids:
+        L.append("| (no spec.md found) | | | |")
+
+    L += ["", "## Pipeline steps", ""]
+    if runs:
+        L += ["| Time (UTC) | Stage | Agent | Model(s) · tokens in/out · cost | Seconds | Error | Session |", "|---|---|---|---|---|---|---|"]
+        for r in runs:
+            ms = "; ".join(f"{m} · {u['input'] + u['cache_read'] + u['cache_write']}/{u['output']} · ${u['cost_usd']:.2f}"
+                           for m, u in (r.get("models") or {}).items()) or f"{r.get('model_requested')} (usage not recorded)"
+            L.append(f"| {r.get('ts', 'n/a')} | {r['stage']} | {r.get('agent') or '-'} | {esc(ms)} | {r.get('seconds')} | "
+                     f"{'yes' if r.get('is_error') else 'no'} | `{r.get('session_id')}` |")
+        cost = sum(r.get("cost_usd") or 0 for r in runs)
+        fixes = sum(1 for r in runs if r["stage"] in ("fix", "repair"))
+        L += ["", f"- Total cost: **${cost:.2f}** · models that ran: {qa.models_line(runs)}",
+              f"- Repair/fix attempts used: **{fixes}** (ceiling {qa.MAX_FIX_ATTEMPTS})"]
+    else:
+        L.append(f"No run records at `.qa-work/auto/{key}/runs.jsonl` (the ticket was handled manually or on another machine).")
+
+    L += ["", "## Human approvals", ""]
+    if jira_ok:
+        try:
+            ev = approval_events(key)
+            L += [f"- Jira label `{lab}` added {ts}" for ts, lab in ev] or ["- No QA labels recorded in the Jira history."]
+        except Exception as e:  # noqa: BLE001 — a Jira outage must not block the report
+            L.append(f"- Jira history unavailable ({type(e).__name__}).")
+    else:
+        L.append("- Jira history not queried (`--no-jira` or no credentials in ~/.config/qa-auto/env).")
+    if pr:
+        rv = [x for x in pr.get("reviews", []) if x.get("state") == "APPROVED"]
+        L += [f"- PR review approved {x['submittedAt']}" for x in rv] or \
+             ["- PR: no approving review recorded" + (" (merged without one)." if pr.get("mergedAt") else " yet (nothing merges without one).")]
+        if pr.get("mergedAt"):
+            L.append(f"- PR merged {pr['mergedAt']}")
+    return "\n".join(L) + "\n"
+
+
+def write_report(key, app, text):
+    d = ROOT / "apps" / app / "reports" / key
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / f"run-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.md"
+    f.write_text(text)
+    return f
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("ticket")
+    p.add_argument("--app")
+    p.add_argument("--no-jira", action="store_true")
+    p.add_argument("--no-github", action="store_true")
+    p.add_argument("--stdout", action="store_true", help="print instead of writing a file")
+    a = p.parse_args()
+    app = a.app or qa.app_for_ticket(a.ticket)
+    text = build_report(a.ticket, app, not a.no_jira, not a.no_github)
+    if a.stdout:
+        sys.stdout.write(text)
+    else:
+        print(write_report(a.ticket, app, text).relative_to(ROOT))
+
+
+if __name__ == "__main__":
+    main()
